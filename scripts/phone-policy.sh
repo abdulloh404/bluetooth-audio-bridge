@@ -21,29 +21,6 @@ def version(program):
     return tuple(int(part) for part in match.groups())
 
 
-def source_role_property():
-    candidates = []
-    if os.environ.get("SPA_PLUGIN_DIR"):
-        candidates.extend(Path(part) / "bluez5/libspa-bluez5.so" for part in os.environ["SPA_PLUGIN_DIR"].split(":"))
-    if shutil.which("pkg-config"):
-        result = subprocess.run(["pkg-config", "--variable=plugindir", "libspa-0.2"], capture_output=True, text=True, timeout=5)
-        if result.returncode == 0 and result.stdout.strip():
-            candidates.append(Path(result.stdout.strip()) / "bluez5/libspa-bluez5.so")
-    for base in (Path("/usr/lib"), Path("/usr/lib64"), Path("/usr/local/lib")):
-        candidates.append(base / "spa-0.2/bluez5/libspa-bluez5.so")
-        candidates.extend(sorted(base.glob("*/spa-0.2/bluez5/libspa-bluez5.so")))
-    for path in dict.fromkeys(candidates):
-        if not path.is_file():
-            continue
-        data = path.read_bytes()
-        # ตรวจ capability ของ plugin จริง เพราะชื่อ property เปลี่ยนใน PipeWire รุ่นใหม่
-        for key in ("bluez5.media-source-role", "bluez5.a2dp-source-role"):
-            if key.encode() + b"\0" in data:
-                return key
-        raise RuntimeError(f"The Bluetooth plugin {path} does not expose a supported phone-input property")
-    raise RuntimeError("PipeWire's Bluetooth plugin was not found; install libspa-0.2-bluetooth first")
-
-
 def install_policy(path, content, marker):
     if os.geteuid() == 0:
         raise RuntimeError("Install this policy as the desktop user, not root")
@@ -70,7 +47,7 @@ def install_policy(path, content, marker):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Preview a WirePlumber rule for only the selected iPhone. --install explicitly saves the rule; services are never restarted.")
+    parser = argparse.ArgumentParser(description="Let the user service own the selected iPhone's direct playback route. --install saves the scoped rule; services are never restarted.")
     parser.add_argument("iphone_address", help="Paired iPhone Bluetooth address, AA:BB:CC:DD:EE:FF")
     parser.add_argument("--install", action="store_true", help="Explicitly install the previewed rule in the current user's WirePlumber configuration")
     args = parser.parse_args()
@@ -83,7 +60,6 @@ def main():
         raise RuntimeError("PipeWire 0.3.48 or newer is required")
     if wp_version[0] != 0 or wp_version[1] not in (4, 5):
         raise RuntimeError("This generator supports WirePlumber 0.4 and 0.5; review the configuration format before using another version")
-    role = source_role_property()
     config_home = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
     if not config_home.is_absolute():
         raise RuntimeError("XDG_CONFIG_HOME must be an absolute path")
@@ -95,16 +71,17 @@ def main():
         path = config_home / "wireplumber/bluetooth.lua.d/90-bluetooth-audio-bridge-phone.lua"
         rule = f'''table.insert(bluez_monitor.rules, {{
   matches = {{
-    {{ {{ "node.name", "matches", "bluez_input.{token}.*" }} }},
+    {{
+      {{ "node.name", "matches", "bluez_input.{token}.*" }},
+      {{ "api.bluez5.profile", "equals", "a2dp-source" }},
+    }},
   }},
   apply_properties = {{
-    ["{role}"] = "input",
     ["node.autoconnect"] = false,
     ["node.dont-reconnect"] = true,
     ["node.dont-fallback"] = true,
-    ["node.hidden"] = true,
-    ["priority.session"] = 0,
     ["bluetooth-audio-bridge.phone"] = true,
+    ["bluetooth-audio-bridge.mode"] = "direct",
   }},
 }})
 '''
@@ -113,28 +90,27 @@ def main():
         path = config_home / "wireplumber/wireplumber.conf.d/90-bluetooth-audio-bridge-phone.conf"
         rule = f'''monitor.bluez.rules = [
   {{
-    matches = [ {{ node.name = "~bluez_input\\\\.{token}\\\\..*" }} ]
+    matches = [ {{ node.name = "~bluez_input\\\\.{token}\\\\..*" api.bluez5.profile = "a2dp-source" }} ]
     actions = {{
       update-props = {{
-        {role} = "input"
         node.autoconnect = false
         node.dont-reconnect = true
         node.dont-fallback = true
-        node.hidden = true
-        priority.session = 0
         bluetooth-audio-bridge.phone = true
+        bluetooth-audio-bridge.mode = "direct"
       }}
     }}
   }}
 ]
 '''
-    content = f"{marker} BLUETOOTH_AUDIO_BRIDGE_POLICY=1\n{marker} BLUETOOTH_AUDIO_BRIDGE_PHONE={address}\n{marker} PipeWire {pw_text}; WirePlumber {wp_text}\n" + rule
-    print(f"PipeWire {pw_text}, WirePlumber {wp_text}; input property: {role}", file=sys.stderr)
+    content = f"{marker} BLUETOOTH_AUDIO_BRIDGE_POLICY=1\n{marker} BLUETOOTH_AUDIO_BRIDGE_PHONE={address}\n{marker} BLUETOOTH_AUDIO_BRIDGE_ROUTE=direct\n{marker} PipeWire {pw_text}; WirePlumber {wp_text}\n" + rule
+    print(f"PipeWire {pw_text}, WirePlumber {wp_text}; direct native playback", file=sys.stderr)
     print(f"Policy file: {path}", file=sys.stderr)
     if args.install:
         install_policy(path, content, marker)
         print(f"Installed {path}")
-        print("Load the rule in your next desktop session, then connect the iPhone explicitly. No service was restarted.")
+        print("Log out and back in to load the rule, then connect the iPhone explicitly and start bluetooth-audio-bridge.service.")
+        print("After this rule is loaded, phone playback requires the running service. No service was restarted.")
     else:
         print(content, end="")
         print("Preview only. Run again with --install after reviewing this rule to save it.", file=sys.stderr)

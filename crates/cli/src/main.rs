@@ -78,18 +78,18 @@ fn print_status(data: &serde_json::Value) {
     println!("Config: {}", text(&data["config_path"]));
     println!("Routing requested: {}", boolean(&data["config"]["audio"]["routing_enabled"]));
     let audio = &data["audio"];
-    println!("Routing enabled in engine: {}", boolean(&audio["routing_enabled"]));
-    println!("PipeWire connected: {} | virtual output ready: {}", boolean(&audio["pipewire_connected"]), boolean(&audio["virtual_sink_ready"]));
+    println!("Direct route management enabled: {}", boolean(&audio["routing_enabled"]));
+    println!("PipeWire connected: {} | direct phone-to-headphones route ready: {}", boolean(&audio["pipewire_connected"]), boolean(&audio["route_ready"]));
     for (key, label, ready) in [("phone", "Phone", "phone_ready"), ("headphones", "Headphones", "headphones_ready")] {
         let device = &data["bluetooth"][key];
         println!("{label}: {} | paired: {} | connected: {} | audio ready: {}", text(&device["address"]), boolean(&device["paired"]), boolean(&device["connected"]), boolean(&audio[ready]));
         println!("  {}", text(&data["bluetooth"][format!("{key}_reconnect")]));
     }
-    println!("Output codec: {} | sample rate: {} | channels: {}", text(&audio["codec"]), audio["sample_rate"], audio["channels"]);
+    println!("Native output codec: {} | sample rate: {} | channels: {}", text(&audio["codec"]), audio["sample_rate"], audio["channels"]);
     println!("Phone stream: {} | output stream: {}", text(&audio["phone_stream_state"]), text(&audio["output_stream_state"]));
     let settings = &data["config"]["audio"];
     for source in ["phone", "desktop", "master"] {
-        println!("{source}: gain={} muted={}", settings[format!("{source}_gain")], boolean(&settings[format!("{source}_mute")]));
+        println!("{source}: relative gain={} muted={}", settings[format!("{source}_gain")], boolean(&settings[format!("{source}_mute")]));
     }
     println!("Phone policy: {}", text(&data["phone_policy_message"]));
     for error in [&data["last_error"], &data["bluetooth"]["last_error"], &audio["last_error"]] {
@@ -138,8 +138,11 @@ async fn main() -> Result<()> {
                 }
                 None => {
                     if json {
-                        println!("{}", serde_json::json!({ "running": false, "config_path": path, "message": "Controller is offline; no live audio status is available" }));
-                    } else { println!("Controller is offline; no live audio status is available."); }
+                        println!("{}", serde_json::json!({ "running": false, "config_path": path, "message": "Controller is offline; Ubuntu audio may still be playing independently", "start_command": "systemctl --user start bluetooth-audio-bridge.service" }));
+                    } else {
+                        println!("Controller is offline; Ubuntu audio may still be playing independently.");
+                        println!("Start the controller: systemctl --user start bluetooth-audio-bridge.service");
+                    }
                 }
             }
         }

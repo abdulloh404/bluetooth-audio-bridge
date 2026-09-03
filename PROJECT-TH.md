@@ -1,5 +1,7 @@
 # Bluetooth Audio Bridge
 
+> อัปเดตแนวทางตามคำขอผู้ใช้: รุ่นปัจจุบันใช้เส้นทางเสียงตรงของ PipeWire จาก iPhone ไปยังหูฟัง และควบคุมด้วย `systemctl --user start/stop bluetooth-audio-bridge.service` โดยเก็บคำสั่ง CLI เดิมทั้งหมด ใช้ codec ที่ระบบเจรจาอยู่และปรับระดับเสียงผ่าน software volume ของ stream เอกสารด้านล่างเป็นแบบออกแบบรุ่นก่อน ส่วนที่ระบุ virtual sink, custom PCM mixer และการบังคับ AAC ถูกแทนที่แล้ว ให้อ้างอิง [README.md](README.md) และ [config/default.toml](config/default.toml) สำหรับวิธีใช้และพฤติกรรมปัจจุบัน
+
 ## 1. ภาพรวมโปรเจกต์
 
 Bluetooth Audio Bridge เป็นแอปพลิเคชันบน Linux สำหรับรวมเสียงจาก iPhone และคอมพิวเตอร์ Ubuntu แล้วส่งเสียงที่รวมแล้วไปยังหูฟัง Bluetooth คู่เดียว

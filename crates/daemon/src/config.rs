@@ -24,8 +24,11 @@ pub struct Devices {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Audio {
+    #[serde(skip_serializing)]
     pub virtual_sink_name: String,
+    #[serde(skip_serializing)]
     pub output_codec: String,
+    #[serde(skip_serializing)]
     pub allow_codec_fallback: bool,
     pub phone_gain: f32,
     pub desktop_gain: f32,
@@ -34,6 +37,7 @@ pub struct Audio {
     pub desktop_mute: bool,
     pub master_mute: bool,
     pub routing_enabled: bool,
+    #[serde(skip_serializing)]
     pub headphone_disconnect_action: String,
 }
 
@@ -43,8 +47,8 @@ impl Default for Audio {
             virtual_sink_name: "bluetooth-audio-bridge".into(),
             output_codec: "aac".into(),
             allow_codec_fallback: false,
-            phone_gain: 0.5,
-            desktop_gain: 0.5,
+            phone_gain: 1.0,
+            desktop_gain: 1.0,
             master_gain: 1.0,
             phone_mute: false,
             desktop_mute: false,
@@ -157,13 +161,6 @@ impl Config {
         }
         for gain in [self.audio.phone_gain, self.audio.desktop_gain, self.audio.master_gain] {
             validate_gain(gain)?;
-        }
-        if self.audio.output_codec != "aac" || self.audio.headphone_disconnect_action != "silence" {
-            bail!("Only output_codec = \"aac\" and headphone_disconnect_action = \"silence\" are supported");
-        }
-        let name = &self.audio.virtual_sink_name;
-        if name.is_empty() || name.len() > 100 || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b)) {
-            bail!("virtual_sink_name must contain 1-100 ASCII letters, digits, '-', '_' or '.'");
         }
         if self.connection.retry_initial_seconds == 0 || self.connection.retry_initial_seconds > self.connection.retry_max_seconds || self.connection.retry_max_seconds > 300 {
             bail!("Reconnect delays must satisfy 1 <= retry_initial_seconds <= retry_max_seconds <= 300");

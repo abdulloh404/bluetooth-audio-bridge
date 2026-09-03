@@ -48,10 +48,10 @@ pub fn phone_policy_file_present(address: &str) -> bool {
             let path = home.join(relative);
             let Ok(meta) = fs::symlink_metadata(&path) else { return false };
             meta.is_file() && meta.uid() == uid && meta.len() <= 65536 &&
-                fs::read_to_string(path).is_ok_and(|text| text.lines().any(|line| {
-                    let line = line.trim().trim_start_matches("--").trim_start_matches('#').trim();
-                    line == marker
-                }))
+                fs::read_to_string(path).is_ok_and(|text| {
+                    let mut lines = text.lines().map(|line| line.trim().trim_start_matches("--").trim_start_matches('#').trim());
+                    lines.clone().any(|line| line == marker) && lines.any(|line| line == "BLUETOOTH_AUDIO_BRIDGE_ROUTE=direct")
+                })
         })
 }
 
@@ -104,6 +104,12 @@ struct Retry {
     message: String,
 }
 
+impl Drop for Retry {
+    fn drop(&mut self) {
+        if let Some(task) = self.pending.take() { task.abort(); }
+    }
+}
+
 impl Retry {
     fn new(initial: u64) -> Self {
         Self { address: String::new(), next: Instant::now(), delay: initial, pending: None, message: String::new() }
@@ -130,6 +136,7 @@ impl Retry {
             }
         }
         if !configuration.auto_reconnect || !settings.config.audio.routing_enabled {
+            if let Some(task) = self.pending.take() { task.abort(); }
             self.message = "Automatic reconnect disabled".into();
             return;
         }
@@ -147,7 +154,8 @@ impl Retry {
             return;
         }
         if phone && (!settings.phone_policy_observed || !phone_policy_file_present(address)) {
-            self.message = "Waiting for loaded phone policy: install the scoped rule, load it in WirePlumber, then connect the phone explicitly once".into();
+            if let Some(task) = self.pending.take() { task.abort(); }
+            self.message = "Waiting for loaded direct phone routing policy: install the scoped rule, load it in WirePlumber, then connect the phone explicitly once".into();
             return;
         }
         if !device.uuids.iter().any(|value| value.eq_ignore_ascii_case(uuid)) {

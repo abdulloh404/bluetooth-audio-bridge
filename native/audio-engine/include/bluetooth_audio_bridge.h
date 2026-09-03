@@ -11,10 +11,8 @@ extern "C" {
 typedef struct bab_engine bab_engine;
 
 typedef struct bab_config {
-    const char *virtual_sink_name;
     const char *iphone_address;
     const char *headphones_address;
-    uint8_t allow_codec_fallback;
 } bab_config;
 
 typedef struct bab_levels {
@@ -28,7 +26,8 @@ typedef struct bab_levels {
 
 typedef struct bab_status {
     uint8_t pipewire_connected;
-    uint8_t virtual_sink_ready;
+    uint8_t route_ready;
+    uint8_t phone_policy_ready;
     uint8_t phone_ready;
     uint8_t headphones_ready;
     uint8_t routing_enabled;

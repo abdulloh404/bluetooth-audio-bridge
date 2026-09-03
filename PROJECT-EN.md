@@ -1,5 +1,7 @@
 # Bluetooth Audio Bridge
 
+> Updated user direction: the current version controls the native direct PipeWire route from the iPhone to selected headphones through `systemctl --user start/stop bluetooth-audio-bridge.service`, preserving every CLI command. It observes the existing negotiated codec and uses stream software volumes. The design below is the earlier reference; its virtual sink, custom PCM mixer and forced AAC requirements are superseded. See [README.md](README.md) and [config/default.toml](config/default.toml) for current behavior and usage.
+
 ## 1. Project Overview
 
 Bluetooth Audio Bridge is a Linux application that combines audio from an iPhone and an Ubuntu computer, then sends the mixed audio to a single pair of Bluetooth headphones.

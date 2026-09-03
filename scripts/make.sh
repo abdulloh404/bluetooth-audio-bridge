@@ -16,19 +16,21 @@ Bluetooth Audio Bridge
   make devices                       List Bluetooth devices
   make select IPHONE=MAC HEADPHONES=MAC
   make config                        Show saved configuration
-  make phone-policy IPHONE=MAC        Preview the phone input rule
+  make phone-policy IPHONE=MAC        Preview the direct routing rule
   make phone-policy-install IPHONE=MAC
   make run                           Run the installed daemon in the foreground
   make status                        Show bridge status
   make volume CHANNEL=phone VALUE=0.4
   make mute CHANNEL=phone STATE=on
-  make enable                        Enable mixing
-  make disable                       Disable mixing
+  make enable                        Enable the managed phone route
+  make disable                       Disable the managed phone route
   make uninstall                     Remove this user's bridge installation
 
 CHANNEL: phone, desktop, master. VALUE: 0.0-1.0. STATE: on, off.
 sudo make ... is supported and runs as the invoking desktop user.
 Installation does not start services. See README.md for phone setup/removal.
+Start after setup: systemctl --user start bluetooth-audio-bridge.service
+Stop the route:    systemctl --user stop bluetooth-audio-bridge.service
 USAGE
     exit 0
 fi

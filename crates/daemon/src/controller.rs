@@ -11,7 +11,8 @@ use tokio::sync::{mpsc, watch};
 #[derive(Default, Serialize)]
 struct AudioStatus {
     pipewire_connected: bool,
-    virtual_sink_ready: bool,
+    route_ready: bool,
+    phone_policy_ready: bool,
     phone_ready: bool,
     headphones_ready: bool,
     routing_enabled: bool,
@@ -27,7 +28,8 @@ impl From<bluetooth_audio_bridge_audio::Status> for AudioStatus {
     fn from(value: bluetooth_audio_bridge_audio::Status) -> Self {
         Self {
             pipewire_connected: value.pipewire_connected,
-            virtual_sink_ready: value.virtual_sink_ready,
+            route_ready: value.route_ready,
+            phone_policy_ready: value.phone_policy_ready,
             phone_ready: value.phone_ready,
             headphones_ready: value.headphones_ready,
             routing_enabled: value.routing_enabled,
@@ -52,16 +54,28 @@ fn levels(config: &Config) -> Levels {
     }
 }
 
-fn engine(config: &Config) -> std::result::Result<Engine, String> {
+fn apply_controls(engine: &mut Engine, config: &Config) -> std::result::Result<(), String> {
+    // เตรียม gain และ mute ก่อนเปิดเส้นทาง แต่ต้องปิดเส้นทางได้แม้ควบคุม volume ไม่สำเร็จ
+    let (volume, routing) = if config.audio.routing_enabled {
+        let volume = engine.set_levels(levels(config));
+        let routing = engine.set_enabled(true);
+        (volume, routing)
+    } else {
+        let routing = engine.set_enabled(false);
+        let volume = engine.set_levels(levels(config));
+        (volume, routing)
+    };
+    routing.map_err(|error| format!("Route update failed: {error}"))
+        .and(volume.map_err(|error| format!("Software volume update failed: {error}")))
+}
+
+fn engine(config: &Config) -> std::result::Result<(Engine, Option<String>), String> {
     let mut engine = Engine::new(&EngineConfig {
-        virtual_sink_name: config.audio.virtual_sink_name.clone(),
         iphone_address: config.devices.iphone_address.clone(),
         headphones_address: config.devices.headphones_address.clone(),
-        allow_codec_fallback: config.audio.allow_codec_fallback,
     })?;
-    engine.set_levels(levels(config))?;
-    engine.set_enabled(config.audio.routing_enabled)?;
-    Ok(engine)
+    let control_error = apply_controls(&mut engine, config).err();
+    Ok((engine, control_error))
 }
 
 fn diagnostic(event: &str, message: &str) {
@@ -110,7 +124,7 @@ pub async fn run(path: PathBuf) -> Result<()> {
                             "audio": audio,
                             "phone_policy_file_present": bluetooth::phone_policy_file_present(&config.devices.iphone_address),
                             "phone_policy_observed": phone_policy_observed,
-                            "phone_policy_message": if phone_policy_observed { "Safe phone input observed in current PipeWire connection" } else { "Install the scoped phone policy, load it in WirePlumber, then connect the phone explicitly once" },
+                            "phone_policy_message": if phone_policy_observed { "Direct phone routing policy observed in current PipeWire connection" } else { "Install the direct phone routing policy, load it in WirePlumber, then connect the phone explicitly once" },
                             "last_error": controller_error,
                         }))),
                         Command::ConfigShow => match serde_json::to_value(&config) {
@@ -135,20 +149,18 @@ pub async fn run(path: PathBuf) -> Result<()> {
                                         retry_at = Instant::now();
                                         retry_delay = 1;
                                     } else if let Some(engine) = engine_instance.as_mut() {
-                                        engine_error = engine.set_levels(levels(&config))
-                                            .and_then(|()| engine.set_enabled(config.audio.routing_enabled)).err();
-                                        if engine_error.is_none() { audio = engine.status().into(); }
-                                    }
-                                    if let Some(error) = engine_error {
-                                        diagnostic("audio_control_error", &error);
-                                        controller_error = error;
-                                        engine_instance = None;
-                                        audio = AudioStatus::default();
-                                        phone_policy_observed = false;
-                                        retry_at = Instant::now() + Duration::from_secs(1);
+                                        engine_error = apply_controls(engine, &config).err();
+                                        audio = engine.status().into();
                                     }
                                     monitor_tx.send_replace(MonitorConfig { config: config.clone(), phone_policy_observed });
-                                    Response::success("Configuration saved; audio state is available through status", None)
+                                    if let Some(error) = engine_error {
+                                        diagnostic("audio_control_error", &error);
+                                        controller_error = error.clone();
+                                        Response::error(format!("Configuration saved, but a live control could not be applied: {error}"))
+                                    } else {
+                                        if recreate || engine_instance.is_some() { controller_error.clear(); }
+                                        Response::success("Configuration saved; audio state is available through status", None)
+                                    }
                                 }
                             }
                         }
@@ -159,10 +171,11 @@ pub async fn run(path: PathBuf) -> Result<()> {
             _ = interval.tick() => {
                 if engine_instance.is_none() && Instant::now() >= retry_at {
                     match engine(&config) {
-                        Ok(instance) => {
+                        Ok((instance, control_error)) => {
                             engine_instance = Some(instance);
-                            controller_error.clear();
-                            diagnostic("audio_engine_created", "Waiting for PipeWire graph readiness");
+                            controller_error = control_error.unwrap_or_default();
+                            if !controller_error.is_empty() { diagnostic("audio_control_error", &controller_error); }
+                            diagnostic("audio_engine_created", "Waiting for the direct PipeWire phone-to-headphones route");
                         }
                         Err(error) => {
                             if controller_error != error { diagnostic("audio_engine_error", &error); }
@@ -182,9 +195,10 @@ pub async fn run(path: PathBuf) -> Result<()> {
                     retry_delay = (retry_delay * 2).min(30);
                 } else if let Some(engine) = engine_instance.as_ref() {
                     audio = engine.status().into();
-                    if audio.pipewire_connected && audio.virtual_sink_ready { retry_delay = 1; }
+                    if audio.last_error.is_empty() { controller_error.clear(); }
+                    if audio.pipewire_connected && audio.route_ready { retry_delay = 1; }
                 }
-                let observed = audio.pipewire_connected && (phone_policy_observed || audio.phone_ready);
+                let observed = audio.pipewire_connected && (phone_policy_observed || audio.phone_policy_ready);
                 if observed != phone_policy_observed {
                     phone_policy_observed = observed;
                     monitor_tx.send_replace(MonitorConfig { config: config.clone(), phone_policy_observed });

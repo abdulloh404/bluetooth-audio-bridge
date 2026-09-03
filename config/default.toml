@@ -3,17 +3,13 @@ iphone_address = ""
 headphones_address = ""
 
 [audio]
-virtual_sink_name = "bluetooth-audio-bridge"
-output_codec = "aac"
-allow_codec_fallback = false
-phone_gain = 0.5
-desktop_gain = 0.5
+phone_gain = 1.0
+desktop_gain = 1.0
 master_gain = 1.0
 phone_mute = false
 desktop_mute = false
 master_mute = false
 routing_enabled = true
-headphone_disconnect_action = "silence"
 
 [connection]
 auto_reconnect = true

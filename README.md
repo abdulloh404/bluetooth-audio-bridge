@@ -1,142 +1,135 @@
 # Bluetooth Audio Bridge
 
-A Linux audio bridge that mixes iPhone media and desktop application audio into one selected pair of Bluetooth headphones. Rust controls configuration, BlueZ connections and commands; C++ connects and processes the PipeWire graph.
+A user service that controls the native PipeWire route from a paired iPhone to selected Bluetooth headphones. Desktop applications keep their normal routes to the same headphones, and PipeWire combines the streams. Rust provides the CLI, configuration and Bluetooth monitoring; C++ owns the direct PipeWire links and controls software levels.
 
-This is the initial implementation. End-to-end audio, Bluetooth stability, AAC negotiation and coexistence with the existing AirPods virtual microphone still require testing on the target hardware. The acceptance criteria are in [PROJECT-TH.md](PROJECT-TH.md) and [PROJECT-EN.md](PROJECT-EN.md).
+The service uses the existing Bluetooth playback nodes and negotiated codecs. It creates no virtual desktop output, custom PCM mixer or additional audio processing stage. Keep the headphones selected as the output of the desktop applications you want to hear.
 
 ## Requirements
 
 - Linux with an active desktop user session and `XDG_RUNTIME_DIR`.
 - Rust 1.87 or newer, Cargo, GNU Make, a C++17 compiler, CMake and pkg-config.
-- PipeWire 0.3.48 or newer with development headers and SPA development headers. Ubuntu package names: `build-essential`, `cmake`, `pkg-config`, `libpipewire-0.3-dev`, `libspa-0.2-dev`.
-- An existing PipeWire/WirePlumber/BlueZ audio setup, including the Bluetooth SPA plugin (`libspa-0.2-bluetooth` on Ubuntu). The phone-policy generator supports WirePlumber 0.4 and 0.5.
-- Python 3 for phone-policy generation, `flock` from util-linux for installation/removal, and `runuser` from util-linux when using `sudo make`.
-- Both selected devices paired explicitly through the desktop Bluetooth settings. The iPhone must advertise A2DP Source and the headphones A2DP Sink.
-- AAC support in the installed Bluetooth audio stack and the selected headphones. Configuring AAC does not establish that it is available or in use.
+- PipeWire 0.3.48 or newer with development headers and SPA development headers. Ubuntu build packages: `build-essential`, `cmake`, `pkg-config`, `libpipewire-0.3-dev`, `libspa-0.2-dev`.
+- An existing PipeWire/WirePlumber/BlueZ Bluetooth audio setup, including `libspa-0.2-bluetooth` on Ubuntu. The scoped routing rule supports WirePlumber 0.4 and 0.5.
+- Python 3 for rule generation and util-linux (`flock` for installation/removal, `runuser` for `sudo make`).
+- An iPhone already paired as an A2DP Source and headphones already paired as an A2DP Sink through the desktop Bluetooth settings.
 
-The implementation targets the PipeWire 0.3.48 API. The development machine has PipeWire 0.3.48, WirePlumber 0.4.8 and BlueZ 5.64. No replacement Bluetooth stack or kernel module is included.
+## First-time setup
 
-## Build and install
-
-From this directory:
+From the project directory, build and install the programs and user service:
 
 ```sh
-make help
 make install
 export PATH="$HOME/.local/bin:$PATH"
+bluetooth-audio-bridge devices
 ```
 
-The root `Makefile` delegates commands to `./scripts`. `make install` first runs the release build, then installs it; use `make build` to build only. The build produces `target/release/bluetooth-audio-bridge` and `target/release/bluetooth-audio-bridged`. Installation copies these binaries, the phone-policy helper, a draft configuration and an optional user service. Installation does not start or enable services. Existing application configuration is preserved.
+The root `Makefile` delegates to `./scripts`. `make install` includes the release build; `make build` builds only. `sudo make install` also works from your desktop account: the scripts return to that account and restore its Cargo and session paths. For custom Cargo/Rustup or XDG locations, use plain `make` or preserve those variables through `sudo`.
 
-You can use `sudo make install` and the other Make targets from your desktop account. The scripts return to the invoking user, restore the user session paths, and find Cargo in that user's Cargo directory. `sudo ./scripts/build.sh`, `sudo ./scripts/install.sh` and `sudo ./scripts/uninstall.sh` also support this behavior. Installation remains under your home directory. For custom Cargo/Rustup or XDG locations, use plain `make` or preserve those environment variables through `sudo`.
-
-Make controls use the installed programs in `~/.local/bin` directly. The PATH setting above allows the standalone `bluetooth-audio-bridge` commands to work outside this directory. Run the standalone daemon and CLI as your desktop user. Run `bluetooth-audio-bridge config init` if using the binaries directly without the installer.
-
-## Select devices and prepare the phone input
-
-List devices already known to BlueZ, then replace the two example addresses with your paired devices:
+Installation preserves existing configuration and does not start any service. Select your paired devices using their actual addresses:
 
 ```sh
-make devices
-make select IPHONE=AA:BB:CC:DD:EE:FF HEADPHONES=11:22:33:44:55:66
-make config
+bluetooth-audio-bridge select --iphone AA:BB:CC:DD:EE:FF --headphones 11:22:33:44:55:66
+bluetooth-audio-bridge config show
 ```
 
-Device selection validates the pairing and the advertised A2DP role. The app never pairs or trusts another device automatically.
-
-WirePlumber normally treats incoming phone media as playback that can go to the default speakers. Prepare the selected phone as a private input before playing media. The helper detects the installed PipeWire and WirePlumber versions and the Bluetooth plugin's supported input property. Preview its rule:
+To make service stop/start control phone playback, WirePlumber must leave that phone's links to the service. Preview and install its scoped rule:
 
 ```sh
 make phone-policy IPHONE=AA:BB:CC:DD:EE:FF
-```
-
-After reviewing the output, this explicit command saves only that phone's rule:
-
-```sh
 make phone-policy-install IPHONE=AA:BB:CC:DD:EE:FF
 ```
 
-The rule is scoped to the chosen phone, disables its automatic playback routing, and lowers its source priority. Its destination is printed by the helper:
+The rule disables automatic linking, reconnection of audio links and fallback for only that iPhone's A2DP playback node. It adds a direct-routing marker, and leaves the system's Bluetooth source role, codecs, audio format, desktop routes and microphone configuration in place. The service creates the same direct phone-to-headphones links once it sees the loaded rule. Existing conflicting phone links are reported instead of being duplicated or removed.
+
+Log out and back in to load the rule, then explicitly connect the iPhone through the desktop Bluetooth settings once. After loading the rule, phone playback needs the running service. The generator never restarts audio services. If upgrading from the earlier virtual-mixer version, regenerate this rule even if an older phone rule already exists; the earlier input-mode rule is not accepted as a direct-routing rule.
+
+Rule locations (`XDG_CONFIG_HOME` defaults to `~/.config`):
 
 - WirePlumber 0.4: `$XDG_CONFIG_HOME/wireplumber/bluetooth.lua.d/90-bluetooth-audio-bridge-phone.lua`.
 - WirePlumber 0.5: `$XDG_CONFIG_HOME/wireplumber/wireplumber.conf.d/90-bluetooth-audio-bridge-phone.conf`.
 
-`XDG_CONFIG_HOME` defaults to `~/.config`. The helper preserves unrelated policy files and never restarts an audio service. Log out and back in to load the rule, then explicitly connect the iPhone through the desktop Bluetooth settings. A file on disk alone is insufficient: the daemon must also observe the matching safe phone input in the running PipeWire graph before it enables automatic phone reconnection. This observation is reset when the PipeWire connection is recreated.
+Selecting a different iPhone requires regenerating and loading its rule. No device is automatically paired or trusted.
 
-On old PipeWire, the input property is `bluez5.a2dp-source-role`; newer versions use `bluez5.media-source-role`. The helper detects the supported property instead of assuming they are interchangeable. See the [WirePlumber Bluetooth documentation](https://pipewire.pages.freedesktop.org/wireplumber/daemon/configuration/bluetooth.html).
+## Start and stop
 
-## Run and control
-
-Run the daemon in the foreground:
-
-```sh
-make run
-```
-
-Use another terminal for controls, and choose **Bluetooth Audio Bridge** as the output of the desktop applications you want to mix. You can select it as the system output yourself; the application does not set a default output or input.
-
-```sh
-make status
-bluetooth-audio-bridge status --json
-make volume CHANNEL=phone VALUE=0.4
-make volume CHANNEL=desktop VALUE=0.5
-make volume CHANNEL=master VALUE=0.8
-make mute CHANNEL=phone STATE=on
-make mute CHANNEL=phone STATE=off
-make disable
-make enable
-```
-
-`volume` accepts finite linear values from `0.0` to `1.0`. `mute` accepts `phone`, `desktop` or `master` and `on` or `off`. Levels, mute states, enable state and device choices are saved atomically in the user's configuration. While the daemon runs, commands use its private local socket. Offline changes take effect at the next launch.
-
-The status reports Bluetooth pairing/connection separately from the native graph and stream readiness. The codec field comes from the selected live PipeWire device; it is not copied from `output_codec`. The reported PCM rate and channel count describe the bridge graph, not the compressed Bluetooth packet format. A phone that is connected but paused can remain ready with an idle stream state.
-
-To use the installed service instead of the foreground daemon, first end the foreground session yourself, then:
+After installation and first-time setup, load the unit and start the service:
 
 ```sh
 systemctl --user daemon-reload
-systemctl --user enable --now bluetooth-audio-bridge.service
+systemctl --user start bluetooth-audio-bridge.service
+bluetooth-audio-bridge status
 ```
 
-Only one controller owns the configuration and graph at a time. The daemon handles Ctrl+C and termination by removing its own streams, links and virtual sink. It never stops the existing virtual microphone or other audio services.
+Stop the service when you want to stop its iPhone route:
 
-## Configuration and behavior
+```sh
+systemctl --user stop bluetooth-audio-bridge.service
+```
 
-The default file is `$XDG_CONFIG_HOME/bluetooth-audio-bridge/config.toml`. Both binaries accept `--config /absolute/path/config.toml`. Custom configuration files must be owned by the desktop user, have mode `0600`, and reside in a private application directory with mode `0700`. See [config/default.toml](config/default.toml) for all settings.
+Stopping removes the service-owned phone links and releases its software-volume adjustments. Desktop playback and the existing virtual microphone continue on their own routes. The loaded phone rule keeps WirePlumber from creating a replacement phone link while the service is stopped. The service does not disconnect your headphones or stop Bluetooth, PipeWire, WirePlumber or a microphone service.
 
-| Setting or event | Behavior |
-| --- | --- |
-| Default source levels | Phone `0.5`, desktop `0.5`, master `1.0`; the mixer limits final samples to `[-1, 1]`. |
-| `output_codec = "aac"` | Requests advertised A2DP/AAC support; playback waits when AAC cannot be confirmed. |
-| `allow_codec_fallback = true` | Explicitly permits another A2DP codec. HFP is never an output fallback. |
-| `auto_reconnect = true` | Retries only selected, paired devices with capped backoff. Phone retries additionally require the loaded-policy observation described above. |
-| Phone disconnect or pause | Desktop audio can continue independently. |
-| Headphones disconnect | The virtual desktop sink remains; forwarding is silent until the selected output returns. |
-| PipeWire disconnect | The daemon waits and recreates its own graph after reconnection; it does not restart PipeWire or WirePlumber. |
-| Existing phone playback links | Reports a routing conflict and refuses a duplicate route. Remove conflicting manual routes yourself. |
+To start the service at future logins, opt in with `systemctl --user enable bluetooth-audio-bridge.service`. To inspect service logs, use `journalctl --user -u bluetooth-audio-bridge.service -n 50 --no-pager`.
 
-The C++ engine creates a desktop sink, captures its monitor and the selected phone into separate filter inputs, applies independent levels, and connects only to the selected headphone output. PipeWire handles graph mixing and resampling. No PCM buffers cross the Rust boundary. See the [PipeWire API](https://docs.pipewire.org/page_api.html) and [BlueZ Device API](https://github.com/bluez/bluez/blob/master/doc/org.bluez.Device.rst).
+For foreground use, stop the user service yourself first, then run `make run` and use Ctrl+C to stop it. Only one controller can own the configuration and route at a time.
 
-If the system disables AAC or the needed A2DP roles, the status will require user action; the bridge does not rewrite global Bluetooth policy. Changing the selected phone requires generating and loading a rule for its new address.
+## CLI
+
+The command interface is retained:
+
+```text
+bluetooth-audio-bridge [OPTIONS] <COMMAND>
+
+config  devices  select  status  volume  mute  enable  disable  help
+```
+
+Running `bluetooth-audio-bridge` without arguments shows help. Both binaries accept `--config /absolute/path/config.toml`; the CLI also supports `-h/--help` and `-V/--version`.
+
+```sh
+bluetooth-audio-bridge status
+bluetooth-audio-bridge status --json
+bluetooth-audio-bridge volume phone 0.4
+bluetooth-audio-bridge volume desktop 0.5
+bluetooth-audio-bridge volume master 0.8
+bluetooth-audio-bridge mute phone on
+bluetooth-audio-bridge mute phone off
+bluetooth-audio-bridge disable
+bluetooth-audio-bridge enable
+```
+
+`disable` removes the managed phone route while keeping the controller available; `enable` allows it again. These commands do not enable or disable systemd autostart. Configuration changes made while the controller is offline are saved for its next start.
+
+Volume values are relative software gains from `0.0` to `1.0`. New configurations default to `1.0` for phone, desktop and master, preserving the stream's original level. Phone gain applies to the selected phone; desktop gain applies to playback streams already routed to the selected headphones; master multiplies both groups. The controller uses native software volume properties rather than changing headphone hardware volume. Stream control availability and application errors are reported through status. External volume edits are respected when releasing control. Microphone and capture streams are excluded.
+
+Status separates controller availability, Bluetooth connection, loaded routing rule and direct-link readiness. `offline` means that the CLI could not reach this project's controller; unrelated or previously automatic Ubuntu audio can still play. The output codec, rate and channel count are read from the selected native headphone node when available. Incoming phone and outgoing headphone codecs can differ; the controller does not force either codec or claim that a configured value proves AAC is active.
+
+The Make equivalents remain available, including `make devices`, `make status`, `make volume CHANNEL=phone VALUE=0.4`, and `make mute CHANNEL=phone STATE=on`. See `make help` for all targets.
+
+## Configuration and recovery
+
+Configuration is stored in `$XDG_CONFIG_HOME/bluetooth-audio-bridge/config.toml`. Installed configuration files use mode `0600` inside a private application directory with mode `0700`. For standalone binaries without installation, run `bluetooth-audio-bridge config init` first. See [config/default.toml](config/default.toml).
+
+Older configuration files remain readable. The obsolete `virtual_sink_name`, `output_codec`, `allow_codec_fallback` and `headphone_disconnect_action` fields are omitted when configuration is saved; direct routing uses the system's existing audio nodes and codec. Existing device choices, gain and mute values are preserved, including gains saved as `0.5` by the previous version. Set a channel's gain to `1.0` to use its original stream level.
+
+Reconnect attempts target only the selected paired A2DP devices, with bounded backoff. Automatic phone reconnection additionally requires that the current direct rule was observed in the running PipeWire session. Headphone loss removes the managed phone route; the controller does not redirect it to speakers. PipeWire loss releases old graph objects and retries the connection without restarting any system service.
 
 ## Remove
 
-If using the foreground daemon, end it yourself. If using the service:
+End any foreground controller yourself, or stop and disable the user service:
 
 ```sh
 systemctl --user disable --now bluetooth-audio-bridge.service
 ```
 
-Then run:
+Then remove the installation:
 
 ```sh
 make uninstall
 ```
 
-The uninstaller refuses to continue while the daemon or service is active or the service is enabled. Close other bridge commands before running it. It removes the three installed programs, the user unit, both generated phone-rule variants, abandoned phone-policy temporary files, and the complete `bluetooth-audio-bridge` directories under the user's XDG config, data, state, cache and runtime locations. This includes saved settings, temporary configuration files, the control socket and the lock. It also clears any failed state of this specific user unit and refreshes the user service manager. Cleanup errors are reported as failures instead of being silently ignored. Generated configuration and policy can also be removed when no managed binary installation remains.
+The uninstaller refuses to run while the controller or enabled service can still use its files. It removes the three installed programs, user unit, generated phone rules and temporary rule files, and the complete application directories under XDG config, data, state, cache and runtime, including the control socket and lock. It clears failed state for this unit and refreshes the user service manager. Cleanup failures are reported.
 
-Only this application's installed files and application directories are removed. Ubuntu packages, Bluetooth pairings, shared audio configuration, the existing virtual microphone and the source/build directory are preserved. User-supplied configuration files outside these application directories are not installation artifacts and remain under the user's control. No default-device change is made by the bridge, so there is no saved system default for it to overwrite on removal. Log out and back in afterward to unload the removed phone policy from the running WirePlumber session; the uninstaller does not restart audio services.
+Ubuntu packages, Bluetooth pairings, shared audio configuration, the existing virtual microphone, source/build files and user-supplied configuration outside the application directories remain under the user's control. Log out and back in after removal to unload the scoped rule; automatic native phone routing can then resume according to your system's own policy.
 
-## Hardware acceptance
+## Validation scope
 
-Build success establishes compilation only. Before treating this as a completed MVP, perform the ten listening, disconnect/reconnect, AAC and virtual-microphone checks in the project specification. The first version does not include a GUI, phone calls, FaceTime, microphone forwarding, recording or cloud streaming. Bluetooth adapter capacity and end-to-end latency must be measured on the actual hardware.
+Build success establishes compilation only. Confirm service start/stop, simultaneous phone/desktop playback, native codec reporting, volume/mute, reconnect behavior and coexistence with the virtual microphone on the actual hardware. The controller does not implement phone calls, microphone forwarding, recording or cloud streaming.

@@ -1,6 +1,6 @@
 # BLUETOOTH_AUDIO_BRIDGE_MANAGED_SERVICE=1
 [Unit]
-Description=Bluetooth Audio Bridge
+Description=Bluetooth Audio Bridge direct PipeWire routing
 After=pipewire.service wireplumber.service
 
 [Service]
@@ -8,6 +8,7 @@ Type=simple
 ExecStart=%h/.local/bin/bluetooth-audio-bridged
 Restart=on-failure
 RestartSec=3
+TimeoutStopSec=10
 UMask=0077
 NoNewPrivileges=true
 

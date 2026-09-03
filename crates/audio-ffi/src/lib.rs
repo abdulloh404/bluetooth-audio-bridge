@@ -4,10 +4,8 @@ use std::{ffi::{c_char, c_int, CStr, CString}, marker::PhantomData, ptr::NonNull
 
 #[derive(Clone, Debug)]
 pub struct EngineConfig {
-    pub virtual_sink_name: String,
     pub iphone_address: String,
     pub headphones_address: String,
-    pub allow_codec_fallback: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -23,7 +21,8 @@ pub struct Levels {
 #[derive(Clone, Debug)]
 pub struct Status {
     pub pipewire_connected: bool,
-    pub virtual_sink_ready: bool,
+    pub route_ready: bool,
+    pub phone_policy_ready: bool,
     pub phone_ready: bool,
     pub headphones_ready: bool,
     pub routing_enabled: bool,
@@ -37,10 +36,8 @@ pub struct Status {
 
 #[repr(C)]
 struct NativeConfig {
-    virtual_sink_name: *const c_char,
     iphone_address: *const c_char,
     headphones_address: *const c_char,
-    allow_codec_fallback: u8,
 }
 
 #[repr(C)]
@@ -56,7 +53,8 @@ struct NativeLevels {
 #[repr(C)]
 struct NativeStatus {
     pipewire_connected: u8,
-    virtual_sink_ready: u8,
+    route_ready: u8,
+    phone_policy_ready: u8,
     phone_ready: u8,
     headphones_ready: u8,
     routing_enabled: u8,
@@ -97,14 +95,11 @@ fn result(code: c_int, error: &[c_char]) -> Result<(), String> {
 
 impl Engine {
     pub fn new(config: &EngineConfig) -> Result<Self, String> {
-        let sink = CString::new(config.virtual_sink_name.as_str()).map_err(|e| e.to_string())?;
         let phone = CString::new(config.iphone_address.as_str()).map_err(|e| e.to_string())?;
         let headphones = CString::new(config.headphones_address.as_str()).map_err(|e| e.to_string())?;
         let config = NativeConfig {
-            virtual_sink_name: sink.as_ptr(),
             iphone_address: phone.as_ptr(),
             headphones_address: headphones.as_ptr(),
-            allow_codec_fallback: config.allow_codec_fallback.into(),
         };
         let mut error = [0; 1024];
         // C++ คัดลอก config ก่อนคืนค่า จึงไม่เก็บ pointer ของ CString เหล่านี้
@@ -145,7 +140,8 @@ impl Engine {
         unsafe { bab_engine_status(self.handle.as_ptr(), &mut native) };
         Status {
             pipewire_connected: native.pipewire_connected != 0,
-            virtual_sink_ready: native.virtual_sink_ready != 0,
+            route_ready: native.route_ready != 0,
+            phone_policy_ready: native.phone_policy_ready != 0,
             phone_ready: native.phone_ready != 0,
             headphones_ready: native.headphones_ready != 0,
             routing_enabled: native.routing_enabled != 0,
