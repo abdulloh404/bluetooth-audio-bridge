@@ -184,6 +184,11 @@ struct LoopLock {
     ~LoopLock() { pw_thread_loop_unlock(loop); }
 };
 
+struct MetadataValue {
+    std::string value;
+    bool target_removed = false;
+};
+
 struct Engine {
     pw_thread_loop *loop = nullptr;
     pw_context *context = nullptr;
@@ -201,7 +206,7 @@ struct Engine {
     int completed_sequence = -1;
     int param_sequence = 100;
     uint32_t metadata_id = invalid_id;
-    std::map<std::pair<uint32_t, std::string>, std::string> metadata;
+    std::map<std::pair<uint32_t, std::string>, MetadataValue> metadata;
     std::set<uint32_t> incoming_ids;
     std::map<uint32_t, std::unique_ptr<Object>> objects;
     std::map<Route, std::unique_ptr<Owned>> links;
@@ -414,8 +419,11 @@ void Engine::registry_remove(void *data, uint32_t id) noexcept {
         engine.metadata_id = invalid_id;
     } else {
         for (auto it = engine.metadata.begin(); it != engine.metadata.end();) {
-            if (it->first.first == id || (it->first.second == "target.node" && number(it->second) == id)) it = engine.metadata.erase(it);
-            else ++it;
+            if (it->first.first == id) it = engine.metadata.erase(it);
+            else {
+                if (it->first.second == "target.node" && number(it->second.value) == id) it->second.target_removed = true;
+                ++it;
+            }
         }
     }
     engine.objects.erase(id);
@@ -432,9 +440,13 @@ int Engine::metadata_property(void *data, uint32_t subject, const char *key, con
                 else ++it;
             }
         } else if (std::strcmp(key, "default.audio.sink") == 0 || std::strcmp(key, "target.object") == 0 || std::strcmp(key, "target.node") == 0) {
-            if (value) engine.metadata[{subject, key}] = std::strcmp(key, "default.audio.sink") == 0 ?
-                std::string(value) : json_string(value, static_cast<int>(std::strlen(value)));
-            else engine.metadata.erase({subject, key});
+            if (value) {
+                const auto normalized = std::strcmp(key, "default.audio.sink") == 0 ?
+                    std::string(value) : json_string(value, static_cast<int>(std::strlen(value)));
+                auto &entry = engine.metadata[{subject, key}];
+                if (entry.value != normalized) entry.target_removed = false;
+                entry.value = normalized;
+            } else engine.metadata.erase({subject, key});
         }
     } catch (...) { engine.callback_failure(); }
     return 0;
@@ -577,7 +589,7 @@ std::string Engine::input_address(const Object &node) const {
 const std::string &Engine::metadata_value(uint32_t subject, const char *key) const {
     static const std::string empty;
     const auto it = metadata.find({subject, key});
-    return it == metadata.end() ? empty : it->second;
+    return it == metadata.end() ? empty : it->second.value;
 }
 
 Object *Engine::find_output(const std::string &target, bool legacy) const {
@@ -598,8 +610,11 @@ Object *Engine::find_output(const std::string &target, bool legacy) const {
 Object *Engine::output_for(const Object &node) const {
     // อ่าน target ของ Ubuntu โดยไม่แก้ metadata และไม่ใช้เลข object.serial เป็น global node id
     for (const auto *key : {"target.object", "target.node"}) {
-        auto target = metadata_value(node.id, key);
-        if (target.empty()) continue;
+        const auto entry = metadata.find({node.id, key});
+        if (entry == metadata.end() || entry->second.value.empty()) continue;
+        // เก็บ explicit target ที่หายไปไว้ เพื่อไม่ fallback หรือใช้ global id ที่ถูกนำกลับมาใช้ใหม่
+        if (entry->second.target_removed) return nullptr;
+        const auto &target = entry->second.value;
         if (target == "-1" || target == "4294967295")
             return find_output(default_name(metadata_value(PW_ID_CORE, "default.audio.sink")), false);
         return find_output(target, std::strcmp(key, "target.node") == 0);
