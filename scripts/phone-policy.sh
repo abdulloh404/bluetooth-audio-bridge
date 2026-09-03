@@ -12,9 +12,23 @@ import tempfile
 
 
 def version(program):
-    if not shutil.which(program):
+    executable = shutil.which(program)
+    if not executable:
         raise RuntimeError(f"{program} is not installed")
-    result = subprocess.run([program, "--version"], capture_output=True, text=True, timeout=5, check=True)
+    result = subprocess.run([executable, "--version"], capture_output=True, text=True, timeout=5, check=False)
+    if result.returncode != 0 and program == "wireplumber" and shutil.which("dpkg-query"):
+        # WirePlumber 0.4 บางรุ่นไม่มี --version จึงอ่านรุ่นจากแพ็กเกจที่เป็นเจ้าของ executable
+        installed_path = str(Path(executable).resolve())
+        owners = subprocess.run(["dpkg-query", "-S", installed_path], capture_output=True, text=True, timeout=5, check=False)
+        if owners.returncode == 0:
+            for entry in owners.stdout.splitlines():
+                package, separator, owned_path = entry.partition(": ")
+                if separator and owned_path == installed_path:
+                    result = subprocess.run(["dpkg-query", "-W", "-f=${Version}", package], capture_output=True, text=True, timeout=5, check=False)
+                    break
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip() or f"exit status {result.returncode}"
+        raise RuntimeError(f"Cannot determine the installed {program} version: {detail}")
     match = re.search(r"\b(\d+)\.(\d+)\.(\d+)\b", result.stdout + result.stderr)
     if not match:
         raise RuntimeError(f"Cannot determine the installed {program} version")
