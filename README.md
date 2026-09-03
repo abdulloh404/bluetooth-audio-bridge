@@ -96,7 +96,7 @@ bluetooth-audio-bridge disable
 bluetooth-audio-bridge enable
 ```
 
-`disable` removes the managed phone route while keeping the controller available; `enable` allows it again. These commands do not enable or disable systemd autostart. Configuration changes made while the controller is offline are saved for its next start.
+`disable` removes the managed phone route and releases the controller's software-level adjustments while keeping the controller available; `enable` reapplies the saved controls and allows the phone route again. Desktop audio continues on its existing routes. These commands do not enable or disable systemd autostart. Configuration changes made while the controller is offline are saved for its next start.
 
 Volume values are relative software gains from `0.0` to `1.0`. New configurations default to `1.0` for phone, desktop and master, preserving the stream's original level. Phone gain applies to the selected phone; desktop gain applies to playback streams already routed to the selected headphones; master multiplies both groups. The controller uses native software volume properties rather than changing headphone hardware volume. Stream control availability and application errors are reported through status. External volume edits are respected when releasing control. Microphone and capture streams are excluded.
 

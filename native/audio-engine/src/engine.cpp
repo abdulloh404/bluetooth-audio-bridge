@@ -124,12 +124,26 @@ struct Object {
     std::vector<float> written;
     bool owns_volume = false;
     bool volume_pending = false;
+    bool volume_restoring = false;
+    bool volume_release = false;
     bool external_volume = false;
     int volume_sequence = 0;
     std::string volume_error;
 
     Object(Engine *owner, uint32_t global_id, uint32_t access, Kind type)
         : engine(owner), id(global_id), permissions(access), kind(type) {}
+    void clear_volume() {
+        owns_volume = false;
+        volume_pending = false;
+        volume_restoring = false;
+        volume_release = false;
+        external_volume = false;
+        volume_key = 0;
+        original.clear();
+        written.clear();
+        volume_error.clear();
+    }
+
     ~Object() {
         if (listening) spa_hook_remove(&listener);
         if (proxy) pw_proxy_destroy(proxy);
@@ -203,7 +217,7 @@ struct Engine {
                     for (auto &entry : objects) restore_levels(*entry.second);
                 } catch (...) {}
                 links.clear();
-                try { flush(); } catch (...) {}
+                try { flush(); wait_restorations(); } catch (...) {}
             }
             pw_thread_loop_stop(loop);
         }
@@ -230,6 +244,7 @@ struct Engine {
     static void link_info(void *, const pw_link_info *) noexcept;
     void init();
     void flush();
+    void wait_restorations();
     void reconcile();
     uint32_t find_port(uint32_t node, const char *direction, const char *channel) const;
     Object *device_for(const Object &node) const;
@@ -270,6 +285,16 @@ void Engine::flush() {
     while (completed_sequence != sequence && !fatal) {
         if (pw_thread_loop_timed_wait_full(loop, &deadline) < 0)
             throw std::runtime_error("Timed out waiting for PipeWire to confirm audio changes");
+    }
+}
+
+void Engine::wait_restorations() {
+    timespec deadline{};
+    pw_thread_loop_get_time(loop, &deadline, SPA_NSEC_PER_SEC);
+    while (!fatal) {
+        for (auto &entry : objects) if (entry.second->volume_release && !entry.second->volume_pending) restore_levels(*entry.second);
+        if (std::none_of(objects.begin(), objects.end(), [](const auto &entry) { return entry.second->volume_restoring || entry.second->volume_release; })) return;
+        if (pw_thread_loop_timed_wait_full(loop, &deadline) < 0) return;
     }
 }
 
@@ -413,9 +438,13 @@ void Engine::node_param(void *data, int sequence, uint32_t id, uint32_t, uint32_
         const auto &observed = object.volume_key == SPA_PROP_softVolumes ? object.soft_volumes : object.channel_volumes;
         if (object.volume_pending) {
             if (same_levels(observed, object.written)) {
-                object.volume_pending = false;
-                object.owns_volume = true;
-                object.volume_error.clear();
+                if (object.volume_restoring) object.clear_volume();
+                else {
+                    object.volume_pending = false;
+                    object.owns_volume = true;
+                    object.volume_error.clear();
+                }
+                pw_thread_loop_signal(object.engine->loop, false);
             } else if (sequence == object.volume_sequence) {
                 // บาง node ส่งผลเปลี่ยน Props ภายหลัง; ยังเก็บ pending ไว้เพื่อคืนค่าเมื่อได้รับ confirmation
                 object.volume_error = "PipeWire has not confirmed the requested software volume; no further writes will be made until confirmed or retried";
@@ -568,7 +597,8 @@ void Engine::write_levels(Object &object, const std::vector<float> &values) {
 }
 
 void Engine::apply_levels(Object &object, float gain, bool phone) {
-    if (object.volume_pending || object.external_volume) return;
+    if (object.volume_release) restore_levels(object);
+    if (object.volume_pending || object.volume_restoring || object.volume_release || object.external_volume) return;
     if (!object.owns_volume) {
         if (gain == 1.0f) {
             object.volume_error.clear();
@@ -596,19 +626,21 @@ void Engine::apply_levels(Object &object, float gain, bool phone) {
 }
 
 void Engine::restore_levels(Object &object) {
-    if (!object.volume_key) return;
+    if (!object.volume_key || object.volume_restoring) return;
+    if (object.volume_pending) {
+        object.volume_release = true;
+        return;
+    }
     const auto &observed = object.volume_key == SPA_PROP_softVolumes ? object.soft_volumes : object.channel_volumes;
-    if ((object.owns_volume || object.volume_pending) && same_levels(observed, object.written) && !same_levels(observed, object.original)) {
+    if (object.owns_volume && same_levels(observed, object.written) && !same_levels(observed, object.original)) {
         const auto original = object.original;
         write_levels(object, original);
+        object.volume_restoring = true;
+        object.volume_release = false;
+        object.owns_volume = false;
+        return;
     }
-    object.owns_volume = false;
-    object.volume_pending = false;
-    object.external_volume = false;
-    object.volume_key = 0;
-    object.original.clear();
-    object.written.clear();
-    object.volume_error.clear();
+    object.clear_volume();
 }
 
 void Engine::reconcile() {
@@ -673,14 +705,13 @@ void Engine::reconcile() {
         if (!desired.count(it->first) || it->second->failed) it = links.erase(it);
         else ++it;
     }
-    for (const auto &route : desired) if (!links.count(route)) add_link(route);
-    current.route_ready = desired.size() == 2 && std::all_of(desired.begin(), desired.end(), [this](const Route &route) { return link_ready(route); });
     level_targets.clear();
     if (manage) level_targets.insert(phone_id);
     // คง desktop control เมื่อโทรศัพท์หลุด โดยไม่เปลี่ยนเส้นทางที่แอปเลือกไว้
     if (connected && enabled && current.headphones_ready) {
         for (const auto &entry : objects) if (desktop_target(*entry.second)) level_targets.insert(entry.first);
     }
+    std::string level_error;
     for (auto &entry : objects) {
         auto &object = *entry.second;
         if (!level_targets.count(object.id)) restore_levels(object);
@@ -689,10 +720,25 @@ void Engine::reconcile() {
             const float gain = levels.master_mute || (is_phone ? levels.phone_mute : levels.desktop_mute) ? 0.0f :
                 levels.master_gain * (is_phone ? levels.phone_gain : levels.desktop_gain);
             apply_levels(object, gain, is_phone);
-            if (error.empty() && !object.volume_error.empty()) error = object.volume_error;
-            else if (error.empty() && object.volume_pending) error = "Waiting for PipeWire to confirm software volume";
+        }
+        if (level_error.empty() && !object.volume_error.empty()) level_error = object.volume_error;
+        else if (level_error.empty() && object.volume_pending) level_error = "Waiting for PipeWire to confirm software volume";
+    }
+    bool phone_levels_ready = false;
+    if (manage) {
+        const float gain = levels.phone_mute || levels.master_mute ? 0.0f : levels.phone_gain * levels.master_gain;
+        phone_levels_ready = !phone->volume_pending && !phone->volume_restoring && !phone->volume_release && phone->volume_error.empty();
+        if (phone_levels_ready && gain != 1.0f) {
+            auto expected = phone->original;
+            for (auto &value : expected) value *= gain;
+            const auto &observed = phone->volume_key == SPA_PROP_softVolumes ? phone->soft_volumes : phone->channel_volumes;
+            phone_levels_ready = phone->volume_key && !phone->external_volume && !expected.empty() && same_levels(expected, observed);
         }
     }
+    // ตั้งและยืนยัน gain ก่อนเปิด links ใหม่ เพื่อไม่ให้ startup mute ส่งเสียงออกชั่วขณะ
+    if (phone_levels_ready) for (const auto &route : desired) if (!links.count(route)) add_link(route);
+    current.route_ready = desired.size() == 2 && std::all_of(desired.begin(), desired.end(), [this](const Route &route) { return link_ready(route); });
+    if (!level_error.empty()) error = level_error + (error.empty() ? "" : "; " + error);
     if (graph_error[0]) error = graph_error;
     else if (error.empty() && enabled && !current.route_ready) error = "Waiting for direct stereo links to become ready";
     copy_text(current.last_error, sizeof(current.last_error), error.c_str());
@@ -739,7 +785,7 @@ extern "C" int bab_engine_set_levels(bab_engine *engine, const bab_levels *level
         value.levels = *levels;
         for (auto &entry : value.objects) {
             auto &object = *entry.second;
-            if (object.external_volume || (object.volume_pending && !object.volume_error.empty()))
+            if (!object.volume_restoring && (object.external_volume || (object.volume_pending && !object.volume_error.empty())))
                 value.restore_levels(object);
             object.volume_error.clear();
         }
@@ -778,6 +824,7 @@ extern "C" int bab_engine_set_enabled(bab_engine *engine, uint8_t enabled, char 
         engine->value.enabled = enabled != 0;
         engine->value.reconcile();
         engine->value.flush();
+        if (!enabled) engine->value.wait_restorations();
         engine->value.reconcile();
     });
 }
