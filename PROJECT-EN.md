@@ -1,5 +1,3 @@
-ได้ครับ นี่คือ Markdown ภาษาอังกฤษสำหรับใช้เป็น `PROJECT.md` โดยใช้ชื่อเสนอว่า `bluetooth-audio-bridge` — ยังเป็นเอกสารออกแบบ ไม่ได้สร้างหรือแก้ไขโปรเจกต์ครับ
-
 # Bluetooth Audio Bridge
 
 ## 1. Project Overview
