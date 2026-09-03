@@ -77,5 +77,5 @@ if [ ! -e "$config_dir/config.toml" ]; then
 fi
 printf '%s\n' "Installed in $bin_dir" "Configuration: $config_dir/config.toml"
 printf '%s\n' 'Follow README.md to select devices and install/load the scoped direct routing rule.'
-printf '%s\n' 'Service commands after setup:' '  systemctl --user daemon-reload' '  systemctl --user start bluetooth-audio-bridge.service' '  systemctl --user stop bluetooth-audio-bridge.service'
+printf '%s\n' 'Service commands after setup:' '  systemctl --user daemon-reload' '  systemctl --user start bluetooth-audio-bridge.service' '  systemctl --user stop bluetooth-audio-bridge.service' '  systemctl --user enable --now bluetooth-audio-bridge.service'
 printf '%s\n' 'Use bluetooth-audio-bridge status for route readiness. No service was enabled or started.'
