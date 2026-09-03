@@ -23,7 +23,7 @@ pub enum Channel { Phone, Desktop, Master }
 pub enum Command {
     Status,
     ConfigShow,
-    Select { iphone_address: String, headphones_address: String },
+    Select { enabled: bool },
     Volume { channel: Channel, value: f32 },
     Mute { channel: Channel, muted: bool },
     Enable { enabled: bool },
@@ -56,10 +56,6 @@ impl Response {
 
 pub fn apply_command(config: &mut Config, command: &Command) -> Result<()> {
     match command {
-        Command::Select { iphone_address, headphones_address } => {
-            config.devices.iphone_address = crate::config::normalize_address(iphone_address)?;
-            config.devices.headphones_address = crate::config::normalize_address(headphones_address)?;
-        }
         Command::Volume { channel, value } => {
             crate::config::validate_gain(*value)?;
             match channel {
@@ -73,10 +69,10 @@ pub fn apply_command(config: &mut Config, command: &Command) -> Result<()> {
             Channel::Desktop => config.audio.desktop_mute = *muted,
             Channel::Master => config.audio.master_mute = *muted,
         },
-        Command::Enable { enabled } => config.audio.routing_enabled = *enabled,
+        Command::Select { enabled } | Command::Enable { enabled } => config.audio.routing_enabled = *enabled,
         Command::Status | Command::ConfigShow => bail!("This command does not change configuration"),
     }
-    config.validate(false)
+    config.validate()
 }
 
 pub fn runtime_dir() -> Result<PathBuf> {

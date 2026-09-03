@@ -14,21 +14,22 @@ Bluetooth Audio Bridge
   make build                         Build release binaries
   make install                       Build and install for your desktop user
   make devices                       List Bluetooth devices
-  make select IPHONE=MAC HEADPHONES=MAC
+  make select                        Choose whether to forward Bluetooth audio
+  make select STATE=on               Allow Bluetooth audio (or STATE=off)
   make config                        Show saved configuration
-  make phone-policy IPHONE=MAC        Preview the direct routing rule
-  make phone-policy-install IPHONE=MAC
+  make phone-policy                  Preview the Bluetooth input rule
+  make phone-policy-install          Install/update the Bluetooth input rule
   make run                           Run the installed daemon in the foreground
   make status                        Show bridge status
   make volume CHANNEL=phone VALUE=0.4
   make mute CHANNEL=phone STATE=on
-  make enable                        Enable the managed phone route
-  make disable                       Disable the managed phone route
+  make enable                        Allow incoming Bluetooth audio
+  make disable                       Pause incoming Bluetooth audio
   make uninstall                     Remove this user's bridge installation
 
 CHANNEL: phone, desktop, master. VALUE: 0.0-1.0. STATE: on, off.
 sudo make ... is supported and runs as the invoking desktop user.
-Installation does not start services. See README.md for phone setup/removal.
+Installation includes the input rule and does not start services. See README.md.
 Start after setup: systemctl --user start bluetooth-audio-bridge.service
 Stop the route:    systemctl --user stop bluetooth-audio-bridge.service
 USAGE
@@ -67,11 +68,10 @@ case "$action" in
         exec "$project_dir/scripts/$action.sh" "$@"
         ;;
     phone-policy|phone-policy-install)
-        : "${IPHONE:?Usage: make phone-policy[-install] IPHONE=AA:BB:CC:DD:EE:FF}"
         if [ "$action" = phone-policy-install ]; then
-            exec "$project_dir/scripts/phone-policy.sh" "$IPHONE" --install "$@"
+            exec "$project_dir/scripts/phone-policy.sh" --install "$@"
         fi
-        exec "$project_dir/scripts/phone-policy.sh" "$IPHONE" "$@"
+        exec "$project_dir/scripts/phone-policy.sh" "$@"
         ;;
     run)
         app_program="$HOME/.local/bin/bluetooth-audio-bridged"
@@ -83,9 +83,11 @@ case "$action" in
         set -- config show "$@"
         ;;
     select)
-        : "${IPHONE:?Usage: make select IPHONE=MAC HEADPHONES=MAC}"
-        : "${HEADPHONES:?Usage: make select IPHONE=MAC HEADPHONES=MAC}"
-        set -- select --iphone "$IPHONE" --headphones "$HEADPHONES" "$@"
+        if [ -n "${STATE:-}" ]; then
+            set -- select "$STATE" "$@"
+        else
+            set -- select "$@"
+        fi
         ;;
     volume)
         : "${CHANNEL:?Usage: make volume CHANNEL=phone|desktop|master VALUE=0.0-1.0}"

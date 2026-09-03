@@ -47,13 +47,9 @@ def install_policy(path, content, marker):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Let the user service own the selected iPhone's direct playback route. --install saves the scoped rule; services are never restarted.")
-    parser.add_argument("iphone_address", help="Paired iPhone Bluetooth address, AA:BB:CC:DD:EE:FF")
-    parser.add_argument("--install", action="store_true", help="Explicitly install the previewed rule in the current user's WirePlumber configuration")
+    parser = argparse.ArgumentParser(description="Let the user service control incoming Bluetooth playback while following the Ubuntu output. --install saves the input rule; services are never restarted.")
+    parser.add_argument("--install", action="store_true", help="Install or update the input rule in the current user's WirePlumber configuration")
     args = parser.parse_args()
-    address = args.iphone_address.upper()
-    if not re.fullmatch(r"(?:[0-9A-F]{2}:){5}[0-9A-F]{2}", address):
-        parser.error("iphone_address must have the form AA:BB:CC:DD:EE:FF")
     pw_version = version("pipewire")
     wp_version = version("wireplumber")
     if pw_version < (0, 3, 48):
@@ -63,7 +59,6 @@ def main():
     config_home = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
     if not config_home.is_absolute():
         raise RuntimeError("XDG_CONFIG_HOME must be an absolute path")
-    token = address.replace(":", "_")
     pw_text = ".".join(map(str, pw_version))
     wp_text = ".".join(map(str, wp_version))
     if wp_version[1] == 4:
@@ -72,7 +67,7 @@ def main():
         rule = f'''table.insert(bluez_monitor.rules, {{
   matches = {{
     {{
-      {{ "node.name", "matches", "bluez_input.{token}.*" }},
+      {{ "node.name", "matches", "bluez_input.*" }},
       {{ "api.bluez5.profile", "equals", "a2dp-source" }},
     }},
   }},
@@ -81,7 +76,7 @@ def main():
     ["node.dont-reconnect"] = true,
     ["node.dont-fallback"] = true,
     ["bluetooth-audio-bridge.phone"] = true,
-    ["bluetooth-audio-bridge.mode"] = "direct",
+    ["bluetooth-audio-bridge.mode"] = "system-output",
   }},
 }})
 '''
@@ -90,27 +85,27 @@ def main():
         path = config_home / "wireplumber/wireplumber.conf.d/90-bluetooth-audio-bridge-phone.conf"
         rule = f'''monitor.bluez.rules = [
   {{
-    matches = [ {{ node.name = "~bluez_input\\\\.{token}\\\\..*" api.bluez5.profile = "a2dp-source" }} ]
+    matches = [ {{ node.name = "~bluez_input[.].*" api.bluez5.profile = "a2dp-source" }} ]
     actions = {{
       update-props = {{
         node.autoconnect = false
         node.dont-reconnect = true
         node.dont-fallback = true
         bluetooth-audio-bridge.phone = true
-        bluetooth-audio-bridge.mode = "direct"
+        bluetooth-audio-bridge.mode = "system-output"
       }}
     }}
   }}
 ]
 '''
-    content = f"{marker} BLUETOOTH_AUDIO_BRIDGE_POLICY=1\n{marker} BLUETOOTH_AUDIO_BRIDGE_PHONE={address}\n{marker} BLUETOOTH_AUDIO_BRIDGE_ROUTE=direct\n{marker} PipeWire {pw_text}; WirePlumber {wp_text}\n" + rule
-    print(f"PipeWire {pw_text}, WirePlumber {wp_text}; direct native playback", file=sys.stderr)
+    content = f"{marker} BLUETOOTH_AUDIO_BRIDGE_POLICY=1\n{marker} BLUETOOTH_AUDIO_BRIDGE_SCOPE=a2dp-source\n{marker} BLUETOOTH_AUDIO_BRIDGE_ROUTE=system-output\n{marker} PipeWire {pw_text}; WirePlumber {wp_text}\n" + rule
+    print(f"PipeWire {pw_text}, WirePlumber {wp_text}; native Bluetooth playback following Ubuntu output", file=sys.stderr)
     print(f"Policy file: {path}", file=sys.stderr)
     if args.install:
         install_policy(path, content, marker)
         print(f"Installed {path}")
-        print("Log out and back in to load the rule, then connect the iPhone explicitly and start bluetooth-audio-bridge.service.")
-        print("After this rule is loaded, phone playback requires the running service. No service was restarted.")
+        print("Log out and back in to load the rule, connect your Bluetooth audio source, and start bluetooth-audio-bridge.service.")
+        print("After this rule is loaded, incoming Bluetooth playback requires the running service with forwarding enabled. No service was restarted.")
     else:
         print(content, end="")
         print("Preview only. Run again with --install after reviewing this rule to save it.", file=sys.stderr)

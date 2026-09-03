@@ -1,6 +1,7 @@
 use anyhow::{bail, Context, Result};
 use bluetooth_audio_bridge_daemon::{bluetooth, config::{self, Config}, ipc::{self, Channel, Command, Request}};
 use clap::{Parser, Subcommand, ValueEnum};
+use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
@@ -20,10 +21,8 @@ enum CliCommand {
     },
     Devices,
     Select {
-        #[arg(long)]
-        iphone: String,
-        #[arg(long)]
-        headphones: String,
+        #[arg(value_enum, help = "Allow or pause Bluetooth audio; omit to choose interactively")]
+        state: Option<Switch>,
     },
     Status {
         #[arg(long)]
@@ -71,27 +70,47 @@ async fn change(path: &Path, command: Command) -> Result<()> {
     Ok(())
 }
 
+fn choose_forwarding(current: bool) -> Result<bool> {
+    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+        bail!("Use 'bluetooth-audio-bridge select on' or 'bluetooth-audio-bridge select off' without an interactive terminal");
+    }
+    println!("Forward Bluetooth audio through PipeWire? Currently: {}", if current { "on" } else { "off" });
+    println!("  1) On  - use the output selected in Ubuntu");
+    println!("  2) Off - pause Bluetooth audio forwarding");
+    print!("Choose 1 or 2 [Enter keeps the current setting]: ");
+    io::stdout().flush()?;
+    let mut answer = String::new();
+    if io::stdin().read_line(&mut answer)? == 0 { bail!("Selection cancelled; configuration unchanged"); }
+    match answer.trim().to_ascii_lowercase().as_str() {
+        "" => Ok(current),
+        "1" | "on" | "yes" | "y" => Ok(true),
+        "2" | "off" | "no" | "n" => Ok(false),
+        _ => bail!("Choose 1 (on) or 2 (off); configuration unchanged"),
+    }
+}
+
 fn print_status(data: &serde_json::Value) {
     let boolean = |value: &serde_json::Value| value.as_bool().unwrap_or(false);
     let text = |value: &serde_json::Value| value.as_str().filter(|value| !value.is_empty()).unwrap_or("unknown").to_owned();
     println!("Controller: running");
     println!("Config: {}", text(&data["config_path"]));
-    println!("Routing requested: {}", boolean(&data["config"]["audio"]["routing_enabled"]));
+    println!("Bluetooth audio requested: {}", boolean(&data["config"]["audio"]["routing_enabled"]));
     let audio = &data["audio"];
-    println!("Direct route management enabled: {}", boolean(&audio["routing_enabled"]));
-    println!("PipeWire connected: {} | direct phone-to-headphones route ready: {}", boolean(&audio["pipewire_connected"]), boolean(&audio["route_ready"]));
-    for (key, label, ready) in [("phone", "Phone", "phone_ready"), ("headphones", "Headphones", "headphones_ready")] {
-        let device = &data["bluetooth"][key];
-        println!("{label}: {} | paired: {} | connected: {} | audio ready: {}", text(&device["address"]), boolean(&device["paired"]), boolean(&device["connected"]), boolean(&audio[ready]));
-        println!("  {}", text(&data["bluetooth"][format!("{key}_reconnect")]));
+    println!("Forwarding enabled: {} | PipeWire connected: {}", boolean(&audio["routing_enabled"]), boolean(&audio["pipewire_connected"]));
+    println!("Bluetooth inputs: {} detected, {} routed", audio["inputs_detected"], audio["inputs_routed"]);
+    println!("Ubuntu default output: {}", text(&audio["default_output_name"]));
+    if let Some(routes) = audio["routes"].as_array() {
+        for route in routes {
+            println!("{} ({}) -> {} | ready: {}", text(&route["input_name"]), text(&route["input_address"]), text(&route["output_name"]), boolean(&route["ready"]));
+            println!("  Native output codec: {} | sample rate: {} | channels: {}", text(&route["codec"]), route["sample_rate"], route["channels"]);
+            if let Some(error) = route["last_error"].as_str().filter(|error| !error.is_empty()) { println!("  Attention: {error}"); }
+        }
     }
-    println!("Native output codec: {} | sample rate: {} | channels: {}", text(&audio["codec"]), audio["sample_rate"], audio["channels"]);
-    println!("Phone stream: {} | output stream: {}", text(&audio["phone_stream_state"]), text(&audio["output_stream_state"]));
     let settings = &data["config"]["audio"];
     for source in ["phone", "desktop", "master"] {
         println!("{source}: relative gain={} muted={}", settings[format!("{source}_gain")], boolean(&settings[format!("{source}_mute")]));
     }
-    println!("Phone policy: {}", text(&data["phone_policy_message"]));
+    println!("Input policy: {}", text(&data["policy_message"]));
     for error in [&data["last_error"], &data["bluetooth"]["last_error"], &audio["last_error"]] {
         if let Some(error) = error.as_str().filter(|error| !error.is_empty()) { println!("Attention: {error}"); }
     }
@@ -107,7 +126,7 @@ async fn main() -> Result<()> {
             let _lock = ipc::ControllerLock::acquire()?;
             if std::fs::symlink_metadata(&path).is_ok() { bail!("{} already exists; it has not been overwritten", path.display()); }
             Config::default().save(&path)?;
-            println!("Created {}. Select both paired devices before starting the controller.", path.display());
+            println!("Created {}. Bluetooth inputs are detected automatically; choose the output in Ubuntu.", path.display());
         }
         CliCommand::Config { command: ConfigCommand::Show } => {
             let config = match remote(&path, Command::ConfigShow).await? {
@@ -123,12 +142,19 @@ async fn main() -> Result<()> {
                 println!("{}  {:<6}  {:<9}  {}", device.address, device.paired, device.connected, device.name);
             }
         }
-        CliCommand::Select { iphone, headphones } => {
-            let iphone_address = config::normalize_address(&iphone)?;
-            let headphones_address = config::normalize_address(&headphones)?;
-            if iphone_address == headphones_address { bail!("iPhone and headphones must be distinct devices"); }
-            bluetooth::validate_selection(&iphone_address, &headphones_address).await?;
-            change(&path, Command::Select { iphone_address, headphones_address }).await?;
+        CliCommand::Select { state } => {
+            let enabled = match state {
+                Some(state) => matches!(state, Switch::On),
+                None => {
+                    let config: Config = match remote(&path, Command::ConfigShow).await? {
+                        Some(response) => serde_json::from_value(response.data.context("Controller omitted configuration")?)?,
+                        None => Config::load(&path)?,
+                    };
+                    choose_forwarding(config.audio.routing_enabled)?
+                }
+            };
+            change(&path, Command::Select { enabled }).await?;
+            println!("Bluetooth audio forwarding: {}. Output follows Ubuntu.", if enabled { "on" } else { "off" });
         }
         CliCommand::Status { json } => {
             match remote(&path, Command::Status).await? {

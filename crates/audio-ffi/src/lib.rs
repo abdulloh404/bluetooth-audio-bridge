@@ -1,12 +1,6 @@
 //! จัดการอายุของ native PipeWire engine โดยไม่ส่ง PCM ผ่าน Rust
 
-use std::{ffi::{c_char, c_int, CStr, CString}, marker::PhantomData, ptr::NonNull, rc::Rc};
-
-#[derive(Clone, Debug)]
-pub struct EngineConfig {
-    pub iphone_address: String,
-    pub headphones_address: String,
-}
+use std::{ffi::{c_char, c_int, CStr}, marker::PhantomData, ptr::NonNull, rc::Rc};
 
 #[derive(Clone, Copy, Debug)]
 pub struct Levels {
@@ -21,23 +15,25 @@ pub struct Levels {
 #[derive(Clone, Debug)]
 pub struct Status {
     pub pipewire_connected: bool,
-    pub route_ready: bool,
-    pub phone_policy_ready: bool,
-    pub phone_ready: bool,
-    pub headphones_ready: bool,
     pub routing_enabled: bool,
+    pub policy_ready: bool,
+    pub inputs_detected: u32,
+    pub inputs_routed: u32,
+    pub default_output_name: String,
+    pub last_error: String,
+    pub routes: Vec<RouteStatus>,
+}
+
+#[derive(Clone, Debug)]
+pub struct RouteStatus {
+    pub input_name: String,
+    pub input_address: String,
+    pub output_name: String,
+    pub ready: bool,
     pub codec: String,
     pub sample_rate: u32,
     pub channels: u32,
-    pub phone_stream_state: String,
-    pub output_stream_state: String,
     pub last_error: String,
-}
-
-#[repr(C)]
-struct NativeConfig {
-    iphone_address: *const c_char,
-    headphones_address: *const c_char,
 }
 
 #[repr(C)]
@@ -53,16 +49,23 @@ struct NativeLevels {
 #[repr(C)]
 struct NativeStatus {
     pipewire_connected: u8,
-    route_ready: u8,
-    phone_policy_ready: u8,
-    phone_ready: u8,
-    headphones_ready: u8,
     routing_enabled: u8,
+    policy_ready: u8,
+    inputs_detected: u32,
+    inputs_routed: u32,
+    default_output_name: [c_char; 512],
+    last_error: [c_char; 512],
+}
+
+#[repr(C)]
+struct NativeRouteStatus {
+    input_name: [c_char; 512],
+    input_address: [c_char; 64],
+    output_name: [c_char; 512],
+    ready: u8,
+    codec: [c_char; 64],
     sample_rate: u32,
     channels: u32,
-    codec: [c_char; 64],
-    phone_stream_state: [c_char; 64],
-    output_stream_state: [c_char; 64],
     last_error: [c_char; 512],
 }
 
@@ -70,11 +73,13 @@ struct NativeStatus {
 struct NativeEngine { _private: [u8; 0] }
 
 extern "C" {
-    fn bab_engine_create(config: *const NativeConfig, error: *mut c_char, size: usize) -> *mut NativeEngine;
+    fn bab_engine_create(error: *mut c_char, size: usize) -> *mut NativeEngine;
     fn bab_engine_set_levels(engine: *mut NativeEngine, levels: *const NativeLevels, error: *mut c_char, size: usize) -> c_int;
     fn bab_engine_set_enabled(engine: *mut NativeEngine, enabled: u8, error: *mut c_char, size: usize) -> c_int;
     fn bab_engine_tick(engine: *mut NativeEngine, error: *mut c_char, size: usize) -> c_int;
     fn bab_engine_status(engine: *const NativeEngine, status: *mut NativeStatus);
+    fn bab_engine_route_count(engine: *const NativeEngine) -> u32;
+    fn bab_engine_route_status(engine: *const NativeEngine, index: u32, status: *mut NativeRouteStatus) -> c_int;
     fn bab_engine_destroy(engine: *mut NativeEngine);
 }
 
@@ -94,16 +99,9 @@ fn result(code: c_int, error: &[c_char]) -> Result<(), String> {
 }
 
 impl Engine {
-    pub fn new(config: &EngineConfig) -> Result<Self, String> {
-        let phone = CString::new(config.iphone_address.as_str()).map_err(|e| e.to_string())?;
-        let headphones = CString::new(config.headphones_address.as_str()).map_err(|e| e.to_string())?;
-        let config = NativeConfig {
-            iphone_address: phone.as_ptr(),
-            headphones_address: headphones.as_ptr(),
-        };
+    pub fn new() -> Result<Self, String> {
         let mut error = [0; 1024];
-        // C++ คัดลอก config ก่อนคืนค่า จึงไม่เก็บ pointer ของ CString เหล่านี้
-        let handle = unsafe { bab_engine_create(&config, error.as_mut_ptr(), error.len()) };
+        let handle = unsafe { bab_engine_create(error.as_mut_ptr(), error.len()) };
         let handle = NonNull::new(handle).ok_or_else(|| native_text(&error))?;
         Ok(Self { handle, _thread: PhantomData })
     }
@@ -138,19 +136,31 @@ impl Engine {
         // NativeStatus มีเพียงตัวเลขและ array จึงกำหนดค่าเริ่มต้นเป็นศูนย์ได้
         let mut native: NativeStatus = unsafe { std::mem::zeroed() };
         unsafe { bab_engine_status(self.handle.as_ptr(), &mut native) };
+        let mut routes = Vec::new();
+        let count = unsafe { bab_engine_route_count(self.handle.as_ptr()) };
+        for index in 0..count {
+            let mut route: NativeRouteStatus = unsafe { std::mem::zeroed() };
+            if unsafe { bab_engine_route_status(self.handle.as_ptr(), index, &mut route) } != 0 { continue; }
+            routes.push(RouteStatus {
+                input_name: native_text(&route.input_name),
+                input_address: native_text(&route.input_address),
+                output_name: native_text(&route.output_name),
+                ready: route.ready != 0,
+                codec: native_text(&route.codec),
+                sample_rate: route.sample_rate,
+                channels: route.channels,
+                last_error: native_text(&route.last_error),
+            });
+        }
         Status {
             pipewire_connected: native.pipewire_connected != 0,
-            route_ready: native.route_ready != 0,
-            phone_policy_ready: native.phone_policy_ready != 0,
-            phone_ready: native.phone_ready != 0,
-            headphones_ready: native.headphones_ready != 0,
             routing_enabled: native.routing_enabled != 0,
-            codec: native_text(&native.codec),
-            sample_rate: native.sample_rate,
-            channels: native.channels,
-            phone_stream_state: native_text(&native.phone_stream_state),
-            output_stream_state: native_text(&native.output_stream_state),
+            policy_ready: native.policy_ready != 0,
+            inputs_detected: native.inputs_detected,
+            inputs_routed: native.inputs_routed,
+            default_output_name: native_text(&native.default_output_name),
             last_error: native_text(&native.last_error),
+            routes,
         }
     }
 }

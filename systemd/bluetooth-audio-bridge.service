@@ -1,6 +1,6 @@
 # BLUETOOTH_AUDIO_BRIDGE_MANAGED_SERVICE=1
 [Unit]
-Description=Bluetooth Audio Bridge direct PipeWire routing
+Description=Bluetooth Audio Bridge through the Ubuntu audio output
 After=pipewire.service wireplumber.service
 
 [Service]

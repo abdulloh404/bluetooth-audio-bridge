@@ -1,8 +1,8 @@
-use crate::bluetooth::{self, BluetoothStatus, MonitorConfig};
+use crate::bluetooth::{self, BluetoothStatus};
 use crate::config::{ensure_user, Config};
 use crate::ipc::{self, Command, Response};
 use anyhow::{Context, Result};
-use bluetooth_audio_bridge_audio::{Engine, EngineConfig, Levels};
+use bluetooth_audio_bridge_audio::{Engine, Levels};
 use serde::Serialize;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -11,16 +11,24 @@ use tokio::sync::{mpsc, watch};
 #[derive(Default, Serialize)]
 struct AudioStatus {
     pipewire_connected: bool,
-    route_ready: bool,
-    phone_policy_ready: bool,
-    phone_ready: bool,
-    headphones_ready: bool,
     routing_enabled: bool,
+    policy_ready: bool,
+    inputs_detected: u32,
+    inputs_routed: u32,
+    default_output_name: String,
+    last_error: String,
+    routes: Vec<RouteStatus>,
+}
+
+#[derive(Serialize)]
+struct RouteStatus {
+    input_name: String,
+    input_address: String,
+    output_name: String,
+    ready: bool,
     codec: String,
     sample_rate: u32,
     channels: u32,
-    phone_stream_state: String,
-    output_stream_state: String,
     last_error: String,
 }
 
@@ -28,17 +36,22 @@ impl From<bluetooth_audio_bridge_audio::Status> for AudioStatus {
     fn from(value: bluetooth_audio_bridge_audio::Status) -> Self {
         Self {
             pipewire_connected: value.pipewire_connected,
-            route_ready: value.route_ready,
-            phone_policy_ready: value.phone_policy_ready,
-            phone_ready: value.phone_ready,
-            headphones_ready: value.headphones_ready,
             routing_enabled: value.routing_enabled,
-            codec: value.codec,
-            sample_rate: value.sample_rate,
-            channels: value.channels,
-            phone_stream_state: value.phone_stream_state,
-            output_stream_state: value.output_stream_state,
+            policy_ready: value.policy_ready,
+            inputs_detected: value.inputs_detected,
+            inputs_routed: value.inputs_routed,
+            default_output_name: value.default_output_name,
             last_error: value.last_error,
+            routes: value.routes.into_iter().map(|route| RouteStatus {
+                input_name: route.input_name,
+                input_address: route.input_address,
+                output_name: route.output_name,
+                ready: route.ready,
+                codec: route.codec,
+                sample_rate: route.sample_rate,
+                channels: route.channels,
+                last_error: route.last_error,
+            }).collect(),
         }
     }
 }
@@ -70,10 +83,7 @@ fn apply_controls(engine: &mut Engine, config: &Config) -> std::result::Result<(
 }
 
 fn engine(config: &Config) -> std::result::Result<(Engine, Option<String>), String> {
-    let mut engine = Engine::new(&EngineConfig {
-        iphone_address: config.devices.iphone_address.clone(),
-        headphones_address: config.devices.headphones_address.clone(),
-    })?;
+    let mut engine = Engine::new()?;
     let control_error = apply_controls(&mut engine, config).err();
     Ok((engine, control_error))
 }
@@ -86,13 +96,12 @@ pub async fn run(path: PathBuf) -> Result<()> {
     ensure_user()?;
     let _lock = ipc::ControllerLock::acquire()?;
     let mut config = Config::load(&path)?;
-    config.validate(true)?;
+    config.validate()?;
     let (listener, _socket_guard) = ipc::bind().await?;
     let (request_tx, mut requests) = mpsc::channel(16);
     let server = tokio::spawn(ipc::serve(listener, request_tx));
-    let (monitor_tx, monitor_rx) = watch::channel(MonitorConfig { config: config.clone(), phone_policy_observed: false });
     let (bluetooth_tx, bluetooth_rx) = watch::channel(BluetoothStatus::default());
-    let monitor = tokio::spawn(bluetooth::monitor(monitor_rx, bluetooth_tx));
+    let monitor = tokio::spawn(bluetooth::monitor(bluetooth_tx));
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).context("Cannot install termination handler")?;
     let interrupt = tokio::signal::ctrl_c();
     tokio::pin!(interrupt);
@@ -102,7 +111,6 @@ pub async fn run(path: PathBuf) -> Result<()> {
     let mut audio = AudioStatus::default();
     let mut retry_at = Instant::now();
     let mut retry_delay = 1u64;
-    let mut phone_policy_observed = false;
     let mut controller_error = String::new();
     diagnostic("controller_started", &path.display().to_string());
 
@@ -122,9 +130,8 @@ pub async fn run(path: PathBuf) -> Result<()> {
                             "config": config,
                             "bluetooth": bluetooth_rx.borrow().clone(),
                             "audio": audio,
-                            "phone_policy_file_present": bluetooth::phone_policy_file_present(&config.devices.iphone_address),
-                            "phone_policy_observed": phone_policy_observed,
-                            "phone_policy_message": if phone_policy_observed { "Direct phone routing policy observed in current PipeWire connection" } else { "Install the direct phone routing policy, load it in WirePlumber, then connect the phone explicitly once" },
+                            "policy_file_present": bluetooth::phone_policy_file_present(),
+                            "policy_message": if audio.policy_ready { "Bluetooth input policy is active; output follows Ubuntu" } else if bluetooth::phone_policy_file_present() { "Input policy is installed; waiting to observe it on incoming Bluetooth audio. Log out and back in after updating the policy" } else { "Install the input policy with make install or make phone-policy-install, then log out and back in" },
                             "last_error": controller_error,
                         }))),
                         Command::ConfigShow => match serde_json::to_value(&config) {
@@ -134,31 +141,23 @@ pub async fn run(path: PathBuf) -> Result<()> {
                         command => {
                             let mut updated = config.clone();
                             let result = ipc::apply_command(&mut updated, &command)
-                                .and_then(|()| updated.validate(true))
+                                .and_then(|()| updated.validate())
                                 .and_then(|()| updated.save(&path));
                             match result {
                                 Err(error) => Response::error(error),
                                 Ok(()) => {
-                                    let recreate = matches!(command, Command::Select { .. });
                                     config = updated;
                                     let mut engine_error = None;
-                                    if recreate {
-                                        engine_instance = None;
-                                        audio = AudioStatus::default();
-                                        phone_policy_observed = false;
-                                        retry_at = Instant::now();
-                                        retry_delay = 1;
-                                    } else if let Some(engine) = engine_instance.as_mut() {
+                                    if let Some(engine) = engine_instance.as_mut() {
                                         engine_error = apply_controls(engine, &config).err();
                                         audio = engine.status().into();
                                     }
-                                    monitor_tx.send_replace(MonitorConfig { config: config.clone(), phone_policy_observed });
                                     if let Some(error) = engine_error {
                                         diagnostic("audio_control_error", &error);
                                         controller_error = error.clone();
                                         Response::error(format!("Configuration saved, but a live control could not be applied: {error}"))
                                     } else {
-                                        if recreate || engine_instance.is_some() { controller_error.clear(); }
+                                        if engine_instance.is_some() { controller_error.clear(); }
                                         Response::success("Configuration saved; audio state is available through status", None)
                                     }
                                 }
@@ -175,7 +174,7 @@ pub async fn run(path: PathBuf) -> Result<()> {
                             engine_instance = Some(instance);
                             controller_error = control_error.unwrap_or_default();
                             if !controller_error.is_empty() { diagnostic("audio_control_error", &controller_error); }
-                            diagnostic("audio_engine_created", "Waiting for the direct PipeWire phone-to-headphones route");
+                            diagnostic("audio_engine_created", "Waiting for Bluetooth audio and the output selected by Ubuntu");
                         }
                         Err(error) => {
                             if controller_error != error { diagnostic("audio_engine_error", &error); }
@@ -196,12 +195,7 @@ pub async fn run(path: PathBuf) -> Result<()> {
                 } else if let Some(engine) = engine_instance.as_ref() {
                     audio = engine.status().into();
                     if audio.last_error.is_empty() { controller_error.clear(); }
-                    if audio.pipewire_connected && audio.route_ready { retry_delay = 1; }
-                }
-                let observed = audio.pipewire_connected && (phone_policy_observed || audio.phone_policy_ready);
-                if observed != phone_policy_observed {
-                    phone_policy_observed = observed;
-                    monitor_tx.send_replace(MonitorConfig { config: config.clone(), phone_policy_observed });
+                    if audio.pipewire_connected && audio.inputs_detected > 0 && audio.inputs_routed == audio.inputs_detected { retry_delay = 1; }
                 }
             }
         }

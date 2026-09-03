@@ -75,7 +75,9 @@ install -m 644 "$project_dir/systemd/bluetooth-audio-bridge.service" "$unit_dir/
 if [ ! -e "$config_dir/config.toml" ]; then
     install -m 600 "$project_dir/config/default.toml" "$config_dir/config.toml"
 fi
+"$project_dir/scripts/phone-policy.sh" --install
 printf '%s\n' "Installed in $bin_dir" "Configuration: $config_dir/config.toml"
-printf '%s\n' 'Follow README.md to select devices and install/load the scoped direct routing rule.'
+printf '%s\n' 'Log out and back in to load the Bluetooth input rule. Choose the output in Ubuntu; no device selection is required.'
+printf '%s\n' 'Use bluetooth-audio-bridge select to choose whether to forward Bluetooth audio.'
 printf '%s\n' 'Service commands after setup:' '  systemctl --user daemon-reload' '  systemctl --user start bluetooth-audio-bridge.service' '  systemctl --user stop bluetooth-audio-bridge.service' '  systemctl --user enable --now bluetooth-audio-bridge.service'
 printf '%s\n' 'Use bluetooth-audio-bridge status for route readiness. No service was enabled or started.'

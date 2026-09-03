@@ -1,9 +1,11 @@
 #include "bluetooth_audio_bridge.h"
 
 #include <pipewire/pipewire.h>
+#include <pipewire/extensions/metadata.h>
 #include <spa/param/audio/format-utils.h>
 #include <spa/param/props.h>
 #include <spa/pod/builder.h>
+#include <spa/utils/json.h>
 
 #include <algorithm>
 #include <cerrno>
@@ -69,15 +71,25 @@ std::string address(const std::string &value) {
     return result.size() == 12 ? result : std::string{};
 }
 
-bool matches_address(const Properties &properties, const std::string &expected) {
-    for (const auto *key : {"api.bluez5.address", "device.string", "api.bluez5.path", "device.name"}) {
-        auto value = property(properties, key);
-        const auto path = value.find("/dev_");
-        if (path != std::string::npos) value = value.substr(path + 5);
-        if (value.compare(0, 11, "bluez_card.") == 0) value = value.substr(11);
-        if (address(value) == expected) return true;
+std::string json_string(const char *value, int length) {
+    std::vector<char> text(static_cast<size_t>(length) + 1);
+    if (spa_json_parse_stringn(value, length, text.data(), static_cast<int>(text.size())) < 0) return {};
+    return text.data();
+}
+
+std::string default_name(const std::string &value) {
+    spa_json root, object;
+    spa_json_init(&root, value.data(), value.size());
+    if (spa_json_enter_object(&root, &object) <= 0) return {};
+    const char *key, *item;
+    int key_size, item_size;
+    while ((key_size = spa_json_next(&object, &key)) > 0) {
+        if ((item_size = spa_json_next(&object, &item)) <= 0) return {};
+        if (json_string(key, key_size) == "name" && !spa_json_is_container(item, item_size))
+            return json_string(item, item_size);
+        if (spa_json_is_container(item, item_size)) spa_json_container_len(&object, item, item_size);
     }
-    return false;
+    return {};
 }
 
 bool same_levels(const std::vector<float> &left, const std::vector<float> &right) {
@@ -98,7 +110,7 @@ std::vector<float> volume_array(const spa_pod *param, uint32_t key) {
 }
 
 struct Engine;
-enum class Kind { Node, Port, Device, Link };
+enum class Kind { Node, Port, Device, Link, Metadata };
 
 struct Object {
     Engine *engine;
@@ -113,6 +125,7 @@ struct Object {
     bool props_readable = false;
     bool format_readable = false;
     bool props_writable = false;
+    bool legacy_target_removed = false;
     pw_node_state node_state = PW_NODE_STATE_CREATING;
     pw_link_state link_state = PW_LINK_STATE_INIT;
     uint32_t rate = 0;
@@ -172,8 +185,6 @@ struct LoopLock {
 };
 
 struct Engine {
-    std::string phone_address;
-    std::string headphones_address;
     pw_thread_loop *loop = nullptr;
     pw_context *context = nullptr;
     pw_core *core = nullptr;
@@ -189,23 +200,16 @@ struct Engine {
     int sync_sequence = 0;
     int completed_sequence = -1;
     int param_sequence = 100;
-    uint32_t phone_id = invalid_id;
-    uint32_t headphones_id = invalid_id;
+    uint32_t metadata_id = invalid_id;
+    std::map<std::pair<uint32_t, std::string>, std::string> metadata;
+    std::set<uint32_t> incoming_ids;
     std::map<uint32_t, std::unique_ptr<Object>> objects;
     std::map<Route, std::unique_ptr<Owned>> links;
     std::set<uint32_t> level_targets;
     bab_levels levels{1.0f, 1.0f, 1.0f, 0, 0, 0};
     bab_status current{};
+    std::vector<bab_route_status> route_statuses;
     char graph_error[512]{};
-
-    explicit Engine(const bab_config &config)
-        : phone_address(address(config.iphone_address ? config.iphone_address : "")),
-          headphones_address(address(config.headphones_address ? config.headphones_address : "")) {
-        if (phone_address.empty() || headphones_address.empty())
-            throw std::runtime_error("Two valid Bluetooth addresses are required");
-        if (phone_address == headphones_address)
-            throw std::runtime_error("The iPhone and headphones must be different devices");
-    }
 
     ~Engine() {
         if (started) {
@@ -237,6 +241,7 @@ struct Engine {
 
     static void registry_global(void *, uint32_t, uint32_t, const char *, uint32_t, const spa_dict *) noexcept;
     static void registry_remove(void *, uint32_t) noexcept;
+    static int metadata_property(void *, uint32_t, const char *, const char *, const char *) noexcept;
     static void node_info(void *, const pw_node_info *) noexcept;
     static void node_param(void *, int, uint32_t, uint32_t, uint32_t, const spa_pod *) noexcept;
     static void port_info(void *, const pw_port_info *) noexcept;
@@ -248,11 +253,15 @@ struct Engine {
     void reconcile();
     uint32_t find_port(uint32_t node, const char *direction, const char *channel) const;
     Object *device_for(const Object &node) const;
-    bool matches(const Object &node, const std::string &expected) const;
+    bool incoming(const Object &node) const;
+    std::string input_address(const Object &node) const;
+    Object *output_for(const Object &node) const;
+    Object *find_output(const std::string &target, bool legacy) const;
+    const std::string &metadata_value(uint32_t subject, const char *key) const;
     std::string codec_for(const Object &node) const;
     void add_link(const Route &route);
     bool link_ready(const Route &route) const;
-    bool foreign_phone_link() const;
+    bool foreign_phone_link(uint32_t phone_id) const;
     bool desktop_target(const Object &node) const;
     void apply_levels(Object &object, float gain, bool phone);
     void restore_levels(Object &object);
@@ -357,14 +366,23 @@ void Engine::registry_global(void *data, uint32_t id, uint32_t permissions, cons
         else if (std::strcmp(type, PW_TYPE_INTERFACE_Port) == 0) { kind = Kind::Port; supported = PW_VERSION_PORT; }
         else if (std::strcmp(type, PW_TYPE_INTERFACE_Device) == 0) { kind = Kind::Device; supported = PW_VERSION_DEVICE; }
         else if (std::strcmp(type, PW_TYPE_INTERFACE_Link) == 0) { kind = Kind::Link; supported = PW_VERSION_LINK; }
-        else return;
+        else if (std::strcmp(type, PW_TYPE_INTERFACE_Metadata) == 0) {
+            const auto *name = props ? spa_dict_lookup(props, PW_KEY_METADATA_NAME) : nullptr;
+            if (!name || std::strcmp(name, "default") != 0 || engine.metadata_id != invalid_id) return;
+            kind = Kind::Metadata;
+            supported = PW_VERSION_METADATA;
+        } else return;
         auto object = std::make_unique<Object>(&engine, id, permissions, kind);
         merge(object->props, props);
         object->proxy = reinterpret_cast<pw_proxy *>(pw_registry_bind(engine.registry, id, type, std::min(version, supported), 0));
         if (!object->proxy) return;
         auto *pointer = object.get();
         engine.objects[id] = std::move(object);
-        if (kind == Kind::Node) {
+        if (kind == Kind::Metadata) {
+            engine.metadata_id = id;
+            static const pw_metadata_events events = [] { pw_metadata_events e{}; e.version = PW_VERSION_METADATA_EVENTS; e.property = metadata_property; return e; }();
+            pw_metadata_add_listener(reinterpret_cast<pw_metadata *>(pointer->proxy), &pointer->listener, &events, pointer);
+        } else if (kind == Kind::Node) {
             static const pw_node_events events = [] { pw_node_events e{}; e.version = PW_VERSION_NODE_EVENTS; e.info = node_info; e.param = node_param; return e; }();
             pw_node_add_listener(reinterpret_cast<pw_node *>(pointer->proxy), &pointer->listener, &events, pointer);
         } else if (kind == Kind::Port) {
@@ -385,13 +403,51 @@ void Engine::registry_remove(void *data, uint32_t id) noexcept {
     auto &engine = *static_cast<Engine *>(data);
     for (auto &entry : engine.links) if (entry.second->id == id) entry.second->failed = true;
     engine.level_targets.erase(id);
+    engine.incoming_ids.erase(id);
+    for (auto &entry : engine.objects) {
+        auto &object = *entry.second;
+        if (object.kind == Kind::Node && number(property(object.props, "node.target")) == id)
+            object.legacy_target_removed = true;
+    }
+    if (id == engine.metadata_id) {
+        engine.metadata.clear();
+        engine.metadata_id = invalid_id;
+    } else {
+        for (auto it = engine.metadata.begin(); it != engine.metadata.end();) {
+            if (it->first.first == id || (it->first.second == "target.node" && number(it->second) == id)) it = engine.metadata.erase(it);
+            else ++it;
+        }
+    }
     engine.objects.erase(id);
+}
+
+int Engine::metadata_property(void *data, uint32_t subject, const char *key, const char *, const char *value) noexcept {
+    auto &object = *static_cast<Object *>(data);
+    auto &engine = *object.engine;
+    try {
+        if (object.id != engine.metadata_id) return 0;
+        if (!key) {
+            for (auto it = engine.metadata.begin(); it != engine.metadata.end();) {
+                if (subject == PW_ID_ANY || it->first.first == subject) it = engine.metadata.erase(it);
+                else ++it;
+            }
+        } else if (std::strcmp(key, "default.audio.sink") == 0 || std::strcmp(key, "target.object") == 0 || std::strcmp(key, "target.node") == 0) {
+            if (value) engine.metadata[{subject, key}] = std::strcmp(key, "default.audio.sink") == 0 ?
+                std::string(value) : json_string(value, static_cast<int>(std::strlen(value)));
+            else engine.metadata.erase({subject, key});
+        }
+    } catch (...) { engine.callback_failure(); }
+    return 0;
 }
 
 void Engine::node_info(void *data, const pw_node_info *info) noexcept {
     auto &object = *static_cast<Object *>(data);
     try {
-        if (info->change_mask & PW_NODE_CHANGE_MASK_PROPS) merge(object.props, info->props);
+        if (info->change_mask & PW_NODE_CHANGE_MASK_PROPS) {
+            const auto previous_target = property(object.props, "node.target");
+            merge(object.props, info->props);
+            if (property(object.props, "node.target") != previous_target) object.legacy_target_removed = false;
+        }
         if (info->change_mask & PW_NODE_CHANGE_MASK_STATE) object.node_state = info->state;
         if (info->change_mask & PW_NODE_CHANGE_MASK_PARAMS) {
             for (uint32_t index = 0; index < info->n_params; ++index) {
@@ -495,10 +551,68 @@ Object *Engine::device_for(const Object &node) const {
     return it != objects.end() && it->second->kind == Kind::Device ? it->second.get() : nullptr;
 }
 
-bool Engine::matches(const Object &node, const std::string &expected) const {
-    if (matches_address(node.props, expected)) return true;
-    const auto *device = device_for(node);
-    return device && matches_address(device->props, expected);
+bool Engine::incoming(const Object &node) const {
+    if (node.kind != Kind::Node) return false;
+    const auto &media_class = property(node.props, "media.class");
+    return (media_class == "Stream/Output/Audio" || media_class == "Audio/Source" || media_class == "Audio/Source/Virtual") &&
+        property(node.props, "api.bluez5.profile") == "a2dp-source";
+}
+
+std::string Engine::input_address(const Object &node) const {
+    auto value = property(node.props, "api.bluez5.address");
+    if (value.empty()) {
+        const auto *device = device_for(node);
+        if (device) value = property(device->props, "api.bluez5.address");
+    }
+    const auto normalized = address(value);
+    if (normalized.empty()) return {};
+    std::string result;
+    for (size_t index = 0; index < normalized.size(); index += 2) {
+        if (!result.empty()) result += ':';
+        result += normalized.substr(index, 2);
+    }
+    return result;
+}
+
+const std::string &Engine::metadata_value(uint32_t subject, const char *key) const {
+    static const std::string empty;
+    const auto it = metadata.find({subject, key});
+    return it == metadata.end() ? empty : it->second;
+}
+
+Object *Engine::find_output(const std::string &target, bool legacy) const {
+    if (target.empty()) return nullptr;
+    Object *found = nullptr;
+    for (const auto &entry : objects) {
+        auto &node = *entry.second;
+        if (node.kind != Kind::Node || property(node.props, "media.class") != "Audio/Sink") continue;
+        const bool match = legacy ? node.id == number(target) :
+            property(node.props, "node.name") == target || property(node.props, "object.serial") == target;
+        if (!match) continue;
+        if (found) return nullptr;
+        found = &node;
+    }
+    return found;
+}
+
+Object *Engine::output_for(const Object &node) const {
+    // อ่าน target ของ Ubuntu โดยไม่แก้ metadata และไม่ใช้เลข object.serial เป็น global node id
+    for (const auto *key : {"target.object", "target.node"}) {
+        auto target = metadata_value(node.id, key);
+        if (target.empty()) continue;
+        if (target == "-1" || target == "4294967295")
+            return find_output(default_name(metadata_value(PW_ID_CORE, "default.audio.sink")), false);
+        return find_output(target, std::strcmp(key, "target.node") == 0);
+    }
+    for (const auto *key : {"target.object", "node.target"}) {
+        const auto &target = property(node.props, key);
+        if (target.empty() || target == "-1" || target == "4294967295") continue;
+        const bool legacy = std::strcmp(key, "node.target") == 0 && number(target) != invalid_id;
+        // global id อาจถูกใช้ซ้ำหลังถอดอุปกรณ์ จึงรอ target ใหม่แทนการต่อไปยังอุปกรณ์อื่น
+        if (legacy && node.legacy_target_removed) return nullptr;
+        return find_output(target, legacy);
+    }
+    return find_output(default_name(metadata_value(PW_ID_CORE, "default.audio.sink")), false);
 }
 
 std::string Engine::codec_for(const Object &node) const {
@@ -525,7 +639,7 @@ uint32_t Engine::find_port(uint32_t node, const char *direction, const char *cha
     return found;
 }
 
-bool Engine::foreign_phone_link() const {
+bool Engine::foreign_phone_link(uint32_t phone_id) const {
     if (phone_id == invalid_id) return false;
     for (const auto &entry : objects) {
         const auto &object = *entry.second;
@@ -538,17 +652,18 @@ bool Engine::foreign_phone_link() const {
 }
 
 bool Engine::desktop_target(const Object &node) const {
-    if (node.kind != Kind::Node || node.id == phone_id || property(node.props, "media.class") != "Stream/Output/Audio" ||
+    if (node.kind != Kind::Node || incoming_ids.count(node.id) || property(node.props, "media.class") != "Stream/Output/Audio" ||
         property(node.props, "node.virtual") == "true" || device_for(node) || !property(node.props, "api.bluez5.address").empty()) return false;
-    bool connected_to_headphones = false;
+    bool connected_to_output = false;
     for (const auto &entry : objects) {
         const auto &link = *entry.second;
         if (link.kind != Kind::Link || link.link_state < PW_LINK_STATE_PAUSED ||
             number(property(link.props, "link.output.node")) != node.id) continue;
-        if (number(property(link.props, "link.input.node")) != headphones_id) return false;
-        connected_to_headphones = true;
+        const auto output = objects.find(number(property(link.props, "link.input.node")));
+        if (output == objects.end() || property(output->second->props, "media.class") != "Audio/Sink") return false;
+        connected_to_output = true;
     }
-    return connected_to_headphones;
+    return connected_to_output;
 }
 
 void Engine::add_link(const Route &route) {
@@ -567,7 +682,7 @@ void Engine::add_link(const Route &route) {
     if (!props) throw std::bad_alloc();
     link->proxy = reinterpret_cast<pw_proxy *>(pw_core_create_object(core, "link-factory", PW_TYPE_INTERFACE_Link, PW_VERSION_LINK, &props->dict, 0));
     pw_properties_free(props);
-    if (!link->proxy) throw std::runtime_error("Cannot create a direct iPhone audio link");
+    if (!link->proxy) throw std::runtime_error("Cannot create a direct Bluetooth audio link");
     pw_proxy_add_listener(link->proxy, &link->listener, &owned_events, link.get());
     link->listening = true;
     links.emplace(route, std::move(link));
@@ -648,67 +763,68 @@ void Engine::reconcile() {
     current = {};
     current.pipewire_connected = connected;
     current.routing_enabled = enabled;
-    copy_text(current.phone_stream_state, sizeof(current.phone_stream_state), "disconnected");
-    copy_text(current.output_stream_state, sizeof(current.output_stream_state), "disconnected");
-    copy_text(current.codec, sizeof(current.codec), "unknown");
-    Object *phone = nullptr;
-    Object *headphones = nullptr;
-    bool multiple_phones = false, multiple_headphones = false;
-    for (auto &entry : objects) {
-        auto &object = *entry.second;
-        if (object.kind != Kind::Node) continue;
-        const auto &media_class = property(object.props, "media.class");
-        if ((media_class == "Stream/Output/Audio" || media_class == "Audio/Source" || media_class == "Audio/Source/Virtual") && matches(object, phone_address)) {
-            if (phone) multiple_phones = true;
-            else phone = &object;
-        }
-        if (media_class == "Audio/Sink" && matches(object, headphones_address)) {
-            if (headphones) multiple_headphones = true;
-            else headphones = &object;
-        }
-    }
-    phone_id = phone ? phone->id : invalid_id;
-    headphones_id = headphones ? headphones->id : invalid_id;
-    std::string error;
-    if (!connected) error = "Waiting for the PipeWire connection";
-    else if (multiple_phones || multiple_headphones) error = "More than one audio node matches a selected device; refusing ambiguous routing";
-    else if (!phone) error = "Waiting for the selected iPhone playback stream";
-    if (phone) {
-        copy_text(current.phone_stream_state, sizeof(current.phone_stream_state), pw_node_state_as_string(phone->node_state));
-        current.phone_policy_ready = !multiple_phones && property(phone->props, "bluetooth-audio-bridge.mode") == "direct" &&
-            property(phone->props, "bluetooth-audio-bridge.phone") == "true" && property(phone->props, "node.autoconnect") == "false" &&
-            property(phone->props, "node.dont-fallback") == "true" && property(phone->props, "node.dont-reconnect") == "true";
-        current.phone_ready = !multiple_phones && phone->node_state != PW_NODE_STATE_ERROR &&
-            find_port(phone_id, "out", "FL") != invalid_id && find_port(phone_id, "out", "FR") != invalid_id;
-        if (error.empty() && !current.phone_policy_ready)
-            error = "Install the direct phone policy, log out and back in, then reconnect the iPhone. Existing playback is left untouched until that policy is loaded.";
-        else if (error.empty() && !current.phone_ready) error = "Waiting for usable selected iPhone stereo output ports";
-    }
-    if (headphones) {
-        copy_text(current.output_stream_state, sizeof(current.output_stream_state), pw_node_state_as_string(headphones->node_state));
-        const auto codec = codec_for(*headphones);
-        copy_text(current.codec, sizeof(current.codec), codec.empty() ? "unknown" : codec.c_str());
-        current.sample_rate = headphones->rate;
-        current.channels = headphones->channels;
-        current.headphones_ready = !multiple_headphones && headphones->node_state != PW_NODE_STATE_ERROR &&
-            find_port(headphones_id, "in", "FL") != invalid_id && find_port(headphones_id, "in", "FR") != invalid_id;
-    }
-    if (error.empty() && !current.headphones_ready) error = "Waiting for usable selected headphone stereo input ports";
-    const bool foreign_route = foreign_phone_link();
-    if (error.empty() && foreign_route) error = "The selected iPhone already has audio links owned by another client. Reconnect it after loading the direct policy; existing links are left untouched.";
-    const bool manage = connected && enabled && current.phone_policy_ready && current.phone_ready && current.headphones_ready && !foreign_route;
+    route_statuses.clear();
+    incoming_ids.clear();
+    for (const auto &entry : objects) if (incoming(*entry.second)) incoming_ids.insert(entry.first);
+    current.inputs_detected = static_cast<uint32_t>(incoming_ids.size());
+    current.policy_ready = !incoming_ids.empty();
+    const auto default_output = default_name(metadata_value(PW_ID_CORE, "default.audio.sink"));
+    copy_text(current.default_output_name, sizeof(current.default_output_name), default_output.c_str());
+
+    struct InputRoute {
+        Object *input;
+        std::set<Route> ports;
+        size_t status_index;
+        bool manage;
+    };
+    std::vector<InputRoute> inputs;
     std::set<Route> desired;
-    if (manage) {
-        for (const auto *channel : {"FL", "FR"}) desired.emplace(find_port(phone_id, "out", channel), find_port(headphones_id, "in", channel));
+    level_targets.clear();
+    for (const auto id : incoming_ids) {
+        auto &input = *objects.at(id);
+        auto *output = output_for(input);
+        bab_route_status status{};
+        copy_text(status.input_name, sizeof(status.input_name), property(input.props, "node.name").c_str());
+        copy_text(status.input_address, sizeof(status.input_address), input_address(input).c_str());
+        copy_text(status.codec, sizeof(status.codec), "unknown");
+        if (output) {
+            copy_text(status.output_name, sizeof(status.output_name), property(output->props, "node.name").c_str());
+            const auto codec = codec_for(*output);
+            copy_text(status.codec, sizeof(status.codec), codec.empty() ? "unknown" : codec.c_str());
+            status.sample_rate = output->rate;
+            status.channels = output->channels;
+        }
+        const bool policy = property(input.props, "bluetooth-audio-bridge.mode") == "system-output" &&
+            property(input.props, "bluetooth-audio-bridge.phone") == "true" && property(input.props, "node.autoconnect") == "false" &&
+            property(input.props, "node.dont-fallback") == "true" && property(input.props, "node.dont-reconnect") == "true";
+        current.policy_ready = current.policy_ready && policy;
+        std::string error;
+        if (!policy) error = "Load the system-output Bluetooth policy and reconnect this device; its existing playback is left untouched";
+        else if (input.node_state == PW_NODE_STATE_ERROR) error = "The incoming Bluetooth audio node is in an error state";
+        else if (find_port(id, "out", "FL") == invalid_id || find_port(id, "out", "FR") == invalid_id)
+            error = "Incoming Bluetooth audio requires usable stereo FL/FR output ports";
+        else if (!output) error = "Waiting for the output selected by Ubuntu (stream target or default.audio.sink)";
+        else if (output->node_state == PW_NODE_STATE_ERROR) error = "The Ubuntu output node is in an error state";
+        else if (find_port(output->id, "in", "FL") == invalid_id || find_port(output->id, "in", "FR") == invalid_id)
+            error = "The Ubuntu output requires usable stereo FL/FR input ports";
+        else if (foreign_phone_link(id)) error = "This Bluetooth stream has links owned by another client; reconnect after loading the policy. Existing links are left untouched";
+        const bool manage = connected && enabled && error.empty();
+        InputRoute route{&input, {}, route_statuses.size(), manage};
+        if (manage) {
+            for (const auto *channel : {"FL", "FR"}) route.ports.emplace(find_port(id, "out", channel), find_port(output->id, "in", channel));
+            desired.insert(route.ports.begin(), route.ports.end());
+            level_targets.insert(id);
+        }
+        copy_text(status.last_error, sizeof(status.last_error), error.c_str());
+        route_statuses.push_back(status);
+        inputs.push_back(std::move(route));
     }
+    // ส่ง destroy ก่อนสร้าง links ไป output ใหม่ โดยไม่แก้ links ของแอปอื่น
     for (auto it = links.begin(); it != links.end();) {
         if (!desired.count(it->first) || it->second->failed) it = links.erase(it);
         else ++it;
     }
-    level_targets.clear();
-    if (manage) level_targets.insert(phone_id);
-    // คง desktop control เมื่อโทรศัพท์หลุด โดยไม่เปลี่ยนเส้นทางที่แอปเลือกไว้
-    if (connected && enabled && current.headphones_ready) {
+    if (connected && enabled) {
         for (const auto &entry : objects) if (desktop_target(*entry.second)) level_targets.insert(entry.first);
     }
     std::string level_error;
@@ -716,7 +832,7 @@ void Engine::reconcile() {
         auto &object = *entry.second;
         if (!level_targets.count(object.id)) restore_levels(object);
         else {
-            const bool is_phone = object.id == phone_id;
+            const bool is_phone = incoming_ids.count(object.id) != 0;
             const float gain = levels.master_mute || (is_phone ? levels.phone_mute : levels.desktop_mute) ? 0.0f :
                 levels.master_gain * (is_phone ? levels.phone_gain : levels.desktop_gain);
             apply_levels(object, gain, is_phone);
@@ -724,23 +840,43 @@ void Engine::reconcile() {
         if (level_error.empty() && !object.volume_error.empty()) level_error = object.volume_error;
         else if (level_error.empty() && object.volume_pending) level_error = "Waiting for PipeWire to confirm software volume";
     }
-    bool phone_levels_ready = false;
-    if (manage) {
+    for (auto &route : inputs) {
+        auto &status = route_statuses[route.status_index];
+        if (!route.manage) continue;
+        const auto &input = *route.input;
         const float gain = levels.phone_mute || levels.master_mute ? 0.0f : levels.phone_gain * levels.master_gain;
-        phone_levels_ready = !phone->volume_pending && !phone->volume_restoring && !phone->volume_release && phone->volume_error.empty();
-        if (phone_levels_ready && gain != 1.0f) {
-            auto expected = phone->original;
+        bool levels_ready = !input.volume_pending && !input.volume_restoring && !input.volume_release && input.volume_error.empty();
+        if (levels_ready && gain != 1.0f) {
+            auto expected = input.original;
             for (auto &value : expected) value *= gain;
-            const auto &observed = phone->volume_key == SPA_PROP_softVolumes ? phone->soft_volumes : phone->channel_volumes;
-            phone_levels_ready = phone->volume_key && !phone->external_volume && !expected.empty() && same_levels(expected, observed);
+            const auto &observed = input.volume_key == SPA_PROP_softVolumes ? input.soft_volumes : input.channel_volumes;
+            levels_ready = input.volume_key && !input.external_volume && !expected.empty() && same_levels(expected, observed);
+        }
+        // ยืนยัน gain ก่อนเปิดเส้นทางใหม่ เพื่อไม่ให้ startup mute มีเสียงหลุดชั่วขณะ
+        if (levels_ready) {
+            try {
+                for (const auto &ports : route.ports) if (!links.count(ports)) add_link(ports);
+            } catch (const std::exception &exception) {
+                copy_text(status.last_error, sizeof(status.last_error), exception.what());
+                for (const auto &ports : route.ports) links.erase(ports);
+            }
+        }
+        status.ready = route.ports.size() == 2 && std::all_of(route.ports.begin(), route.ports.end(), [this](const Route &ports) { return link_ready(ports); });
+        if (status.ready) ++current.inputs_routed;
+        if (!input.volume_error.empty()) copy_text(status.last_error, sizeof(status.last_error), input.volume_error.c_str());
+        else if (!levels_ready) copy_text(status.last_error, sizeof(status.last_error), "Waiting for the requested Bluetooth software gain or mute to be confirmed");
+        else if (!status.ready && !status.last_error[0]) copy_text(status.last_error, sizeof(status.last_error), "Waiting for direct stereo links to become ready");
+    }
+    std::string error;
+    if (!connected) error = "Waiting for the PipeWire connection";
+    else if (!level_error.empty()) error = level_error;
+    else if (incoming_ids.empty()) error = "Waiting for incoming Bluetooth A2DP audio";
+    else {
+        for (const auto &route : route_statuses) {
+            if (route.last_error[0]) { error = route.last_error; break; }
         }
     }
-    // ตั้งและยืนยัน gain ก่อนเปิด links ใหม่ เพื่อไม่ให้ startup mute ส่งเสียงออกชั่วขณะ
-    if (phone_levels_ready) for (const auto &route : desired) if (!links.count(route)) add_link(route);
-    current.route_ready = desired.size() == 2 && std::all_of(desired.begin(), desired.end(), [this](const Route &route) { return link_ready(route); });
-    if (!level_error.empty()) error = level_error + (error.empty() ? "" : "; " + error);
     if (graph_error[0]) error = graph_error;
-    else if (error.empty() && enabled && !current.route_ready) error = "Waiting for direct stereo links to become ready";
     copy_text(current.last_error, sizeof(current.last_error), error.c_str());
 }
 
@@ -759,14 +895,12 @@ int boundary(char *error, size_t error_size, Operation operation) noexcept {
 
 struct bab_engine {
     Engine value;
-    explicit bab_engine(const bab_config &config) : value(config) {}
 };
 
-extern "C" bab_engine *bab_engine_create(const bab_config *config, char *error, size_t error_size) {
+extern "C" bab_engine *bab_engine_create(char *error, size_t error_size) {
     bab_engine *result = nullptr;
     boundary(error, error_size, [&] {
-        if (!config) throw std::runtime_error("Missing engine config");
-        auto engine = std::make_unique<bab_engine>(*config);
+        auto engine = std::make_unique<bab_engine>();
         engine->value.init();
         result = engine.release();
     });
@@ -803,13 +937,14 @@ extern "C" int bab_engine_set_levels(bab_engine *engine, const bab_levels *level
             const bool phone_changed = previous.phone_gain != levels->phone_gain || previous.phone_mute != levels->phone_mute;
             const bool desktop_changed = previous.desktop_gain != levels->desktop_gain || previous.desktop_mute != levels->desktop_mute;
             const bool master_changed = previous.master_gain != levels->master_gain || previous.master_mute != levels->master_mute;
-            const bool phone_target = value.level_targets.count(value.phone_id) != 0;
+            const bool phone_target = std::any_of(value.level_targets.begin(), value.level_targets.end(),
+                [&value](uint32_t id) { return value.incoming_ids.count(id) != 0; });
             const bool desktop_target = std::any_of(value.level_targets.begin(), value.level_targets.end(),
-                [&value](uint32_t id) { return id != value.phone_id; });
+                [&value](uint32_t id) { return value.incoming_ids.count(id) == 0; });
             if (phone_changed && !phone_target)
-                throw std::runtime_error("No controlled iPhone stream is available; requested levels are pending until its direct route is ready");
+                throw std::runtime_error("No controlled incoming Bluetooth stream is available; requested levels are pending until its direct route is ready");
             if (desktop_changed && !desktop_target)
-                throw std::runtime_error("No controllable desktop playback stream targets the selected headphones; requested levels are pending until one is available");
+                throw std::runtime_error("No controllable desktop playback stream targets an audio output; requested levels are pending until one is available");
             if (master_changed && value.level_targets.empty())
                 throw std::runtime_error("No controlled playback streams are available; requested master levels are pending until playback is available");
         }
@@ -846,13 +981,30 @@ extern "C" void bab_engine_status(const bab_engine *engine, bab_status *status) 
         *status = engine->value.current;
         if (!engine->value.connected || engine->value.fatal) {
             status->pipewire_connected = false;
-            status->phone_ready = false;
-            status->headphones_ready = false;
-            status->route_ready = false;
-            status->phone_policy_ready = false;
+            status->inputs_routed = 0;
+            status->policy_ready = false;
             copy_text(status->last_error, sizeof(status->last_error), engine->value.graph_error);
         }
     } catch (...) { copy_text(status->last_error, sizeof(status->last_error), "Cannot read native audio status"); }
+}
+
+extern "C" uint32_t bab_engine_route_count(const bab_engine *engine) {
+    if (!engine) return 0;
+    LoopLock lock(engine->value.loop);
+    return static_cast<uint32_t>(engine->value.route_statuses.size());
+}
+
+extern "C" int bab_engine_route_status(const bab_engine *engine, uint32_t index, bab_route_status *status) {
+    if (!engine || !status) return -1;
+    *status = {};
+    LoopLock lock(engine->value.loop);
+    if (index >= engine->value.route_statuses.size()) return -1;
+    *status = engine->value.route_statuses[index];
+    if (!engine->value.connected || engine->value.fatal) {
+        status->ready = false;
+        copy_text(status->last_error, sizeof(status->last_error), engine->value.graph_error);
+    }
+    return 0;
 }
 
 extern "C" void bab_engine_destroy(bab_engine *engine) {

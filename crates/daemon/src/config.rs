@@ -9,8 +9,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
+    #[serde(skip_serializing)]
     pub devices: Devices,
     pub audio: Audio,
+    #[serde(skip_serializing)]
     pub connection: Connection,
 }
 
@@ -132,13 +134,6 @@ pub fn private_dir(path: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn normalize_address(address: &str) -> Result<String> {
-    if address.len() != 17 || !address.split(':').all(|part| part.len() == 2 && part.bytes().all(|byte| byte.is_ascii_hexdigit())) {
-        bail!("Invalid Bluetooth address: {address}");
-    }
-    Ok(address.to_ascii_uppercase())
-}
-
 pub fn validate_gain(value: f32) -> Result<()> {
     if !value.is_finite() || !(0.0..=1.0).contains(&value) {
         bail!("Gain must be a finite number between 0 and 1");
@@ -147,23 +142,9 @@ pub fn validate_gain(value: f32) -> Result<()> {
 }
 
 impl Config {
-    pub fn validate(&self, require_devices: bool) -> Result<()> {
-        let phone = &self.devices.iphone_address;
-        let headphones = &self.devices.headphones_address;
-        for address in [phone, headphones] {
-            if !address.is_empty() { normalize_address(address)?; }
-        }
-        if require_devices && (phone.is_empty() || headphones.is_empty()) {
-            bail!("Select both paired devices with: bluetooth-audio-bridge select --iphone MAC --headphones MAC");
-        }
-        if !phone.is_empty() && phone.eq_ignore_ascii_case(headphones) {
-            bail!("iPhone and headphones must be distinct devices");
-        }
+    pub fn validate(&self) -> Result<()> {
         for gain in [self.audio.phone_gain, self.audio.desktop_gain, self.audio.master_gain] {
             validate_gain(gain)?;
-        }
-        if self.connection.retry_initial_seconds == 0 || self.connection.retry_initial_seconds > self.connection.retry_max_seconds || self.connection.retry_max_seconds > 300 {
-            bail!("Reconnect delays must satisfy 1 <= retry_initial_seconds <= retry_max_seconds <= 300");
         }
         Ok(())
     }
@@ -178,19 +159,13 @@ impl Config {
         if metadata.len() > 65536 { bail!("Config is larger than 64 KiB"); }
         let mut content = String::new();
         file.read_to_string(&mut content)?;
-        let mut config: Self = toml::from_str(&content).context("Invalid TOML configuration")?;
-        config.validate(false)?;
-        if !config.devices.iphone_address.is_empty() {
-            config.devices.iphone_address = normalize_address(&config.devices.iphone_address)?;
-        }
-        if !config.devices.headphones_address.is_empty() {
-            config.devices.headphones_address = normalize_address(&config.devices.headphones_address)?;
-        }
+        let config: Self = toml::from_str(&content).context("Invalid TOML configuration")?;
+        config.validate()?;
         Ok(config)
     }
 
     pub fn save(&self, path: &Path) -> Result<()> {
-        self.validate(false)?;
+        self.validate()?;
         let parent = path.parent().context("Config path has no parent")?;
         private_dir(parent)?;
         if let Ok(meta) = fs::symlink_metadata(path) {
