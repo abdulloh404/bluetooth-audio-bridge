@@ -1,10 +1,10 @@
 [package]
-name = "bt-audio-bridge-cli"
+name = "bluetooth-audio-bridge-cli"
 version.workspace = true
 edition.workspace = true
 
 [[bin]]
-name = "bt-audio-bridge"
+name = "bluetooth-audio-bridge"
 path = "src/main.rs"
 
 [dependencies]
@@ -13,4 +13,4 @@ clap.workspace = true
 serde_json.workspace = true
 toml.workspace = true
 tokio.workspace = true
-bt-audio-bridge-daemon = { path = "../daemon" }
+bluetooth-audio-bridge-daemon = { path = "../daemon" }

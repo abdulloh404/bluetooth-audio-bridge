@@ -1,10 +1,10 @@
 use anyhow::{bail, Context, Result};
-use bt_audio_bridge_daemon::{bluetooth, config::{self, Config}, ipc::{self, Channel, Command, Request}};
+use bluetooth_audio_bridge_daemon::{bluetooth, config::{self, Config}, ipc::{self, Channel, Command, Request}};
 use clap::{Parser, Subcommand, ValueEnum};
 use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
-#[command(version, about = "Configure and control BT Audio Bridge")]
+#[command(version, about = "Configure and control Bluetooth Audio Bridge")]
 struct Arguments {
     #[arg(long, global = true)]
     config: Option<PathBuf>,

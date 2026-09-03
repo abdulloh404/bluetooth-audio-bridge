@@ -42,8 +42,8 @@ pub struct MonitorConfig {
 pub fn phone_policy_file_present(address: &str) -> bool {
     let Ok(home) = config_home() else { return false };
     let Ok(uid) = ensure_user() else { return false };
-    let marker = format!("BT_AUDIO_BRIDGE_PHONE={address}");
-    ["wireplumber/bluetooth.lua.d/90-bt-audio-bridge-phone.lua", "wireplumber/wireplumber.conf.d/90-bt-audio-bridge-phone.conf"]
+    let marker = format!("BLUETOOTH_AUDIO_BRIDGE_PHONE={address}");
+    ["wireplumber/bluetooth.lua.d/90-bluetooth-audio-bridge-phone.lua", "wireplumber/wireplumber.conf.d/90-bluetooth-audio-bridge-phone.conf"]
         .iter().any(|relative| {
             let path = home.join(relative);
             let Ok(meta) = fs::symlink_metadata(&path) else { return false };

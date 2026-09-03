@@ -3,7 +3,7 @@ iphone_address = ""
 headphones_address = ""
 
 [audio]
-virtual_sink_name = "bt-audio-bridge"
+virtual_sink_name = "bluetooth-audio-bridge"
 output_codec = "aac"
 allow_codec_fallback = false
 phone_gain = 0.5

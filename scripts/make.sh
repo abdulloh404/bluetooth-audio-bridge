@@ -9,7 +9,7 @@ fi
 
 if [ "$action" = help ]; then
     cat <<'USAGE'
-BT Audio Bridge
+Bluetooth Audio Bridge
 
   make build                         Build release binaries
   make install                       Build and install for your desktop user
@@ -59,7 +59,7 @@ if [ "$(id -u)" -eq 0 ]; then
         "$project_dir/scripts/make.sh" "$action" "$@"
 fi
 
-app_program="$HOME/.local/bin/bt-audio-bridge"
+app_program="$HOME/.local/bin/bluetooth-audio-bridge"
 case "$action" in
     build|install|uninstall)
         exec "$project_dir/scripts/$action.sh" "$@"
@@ -72,7 +72,7 @@ case "$action" in
         exec "$project_dir/scripts/phone-policy.sh" "$IPHONE" "$@"
         ;;
     run)
-        app_program="$HOME/.local/bin/bt-audio-bridged"
+        app_program="$HOME/.local/bin/bluetooth-audio-bridged"
         ;;
     devices|status|enable|disable)
         set -- "$action" "$@"

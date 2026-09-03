@@ -83,7 +83,7 @@ pub fn runtime_dir() -> Result<PathBuf> {
     let runtime = PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").context("XDG_RUNTIME_DIR is not set; use a desktop user session")?);
     if !runtime.is_absolute() { bail!("XDG_RUNTIME_DIR must be absolute"); }
     private_dir(&runtime)?;
-    let directory = runtime.join("bt-audio-bridge");
+    let directory = runtime.join("bluetooth-audio-bridge");
     private_dir(&directory)?;
     Ok(directory)
 }

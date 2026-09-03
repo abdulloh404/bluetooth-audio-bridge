@@ -1,10 +1,10 @@
 use anyhow::Result;
-use bt_audio_bridge_daemon::{config, controller};
+use bluetooth_audio_bridge_daemon::{config, controller};
 use clap::Parser;
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(version, about = "Foreground controller for BT Audio Bridge")]
+#[command(version, about = "Foreground controller for Bluetooth Audio Bridge")]
 struct Arguments {
     #[arg(long)]
     config: Option<PathBuf>,

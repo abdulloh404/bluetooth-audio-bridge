@@ -40,7 +40,7 @@ pub struct Audio {
 impl Default for Audio {
     fn default() -> Self {
         Self {
-            virtual_sink_name: "bt-audio-bridge".into(),
+            virtual_sink_name: "bluetooth-audio-bridge".into(),
             output_codec: "aac".into(),
             allow_codec_fallback: false,
             phone_gain: 0.5,
@@ -72,7 +72,7 @@ impl Default for Connection {
 pub fn ensure_user() -> Result<u32> {
     let uid = unsafe { libc::geteuid() };
     if uid == 0 {
-        bail!("Run BT Audio Bridge as the desktop user, not root");
+        bail!("Run Bluetooth Audio Bridge as the desktop user, not root");
     }
     Ok(uid)
 }
@@ -96,7 +96,7 @@ pub fn config_path(path: Option<PathBuf>) -> Result<PathBuf> {
     let path = match path {
         Some(path) if path.is_absolute() => path,
         Some(path) => std::env::current_dir()?.join(path),
-        None => config_home()?.join("bt-audio-bridge/config.toml"),
+        None => config_home()?.join("bluetooth-audio-bridge/config.toml"),
     };
     if path.file_name().is_none() || path.components().any(|part| matches!(part, std::path::Component::ParentDir)) {
         bail!("Config path must name a file and must not contain '..'");
@@ -150,7 +150,7 @@ impl Config {
             if !address.is_empty() { normalize_address(address)?; }
         }
         if require_devices && (phone.is_empty() || headphones.is_empty()) {
-            bail!("Select both paired devices with: bt-audio-bridge select --iphone MAC --headphones MAC");
+            bail!("Select both paired devices with: bluetooth-audio-bridge select --iphone MAC --headphones MAC");
         }
         if !phone.is_empty() && phone.eq_ignore_ascii_case(headphones) {
             bail!("iPhone and headphones must be distinct devices");
@@ -173,7 +173,7 @@ impl Config {
 
     pub fn load(path: &Path) -> Result<Self> {
         let mut file = OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW).open(path)
-            .with_context(|| format!("Cannot read {}; run 'bt-audio-bridge config init' first", path.display()))?;
+            .with_context(|| format!("Cannot read {}; run 'bluetooth-audio-bridge config init' first", path.display()))?;
         let metadata = file.metadata()?;
         if !metadata.is_file() || metadata.uid() != ensure_user()? || metadata.mode() & 0o077 != 0 {
             bail!("{} must be a user-owned regular file with mode 0600", path.display());

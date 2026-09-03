@@ -1,4 +1,4 @@
-#include "bt_audio_bridge.h"
+#include "bluetooth_audio_bridge.h"
 
 #include <pipewire/pipewire.h>
 #include <pipewire/filter.h>
@@ -260,11 +260,11 @@ const pw_proxy_events owned_events = [] {
 void Engine::init() {
     static std::once_flag initialized;
     std::call_once(initialized, [] { pw_init(nullptr, nullptr); });
-    loop = pw_thread_loop_new("bt-audio-bridge", nullptr);
+    loop = pw_thread_loop_new("bluetooth-audio-bridge", nullptr);
     if (!loop) throw std::runtime_error("Cannot create the PipeWire thread loop");
     context = pw_context_new(pw_thread_loop_get_loop(loop), nullptr, 0);
     if (!context) throw std::runtime_error("Cannot create the PipeWire context");
-    core = pw_context_connect(context, pw_properties_new(PW_KEY_APP_NAME, "BT Audio Bridge", nullptr), 0);
+    core = pw_context_connect(context, pw_properties_new(PW_KEY_APP_NAME, "Bluetooth Audio Bridge", nullptr), 0);
     if (!core) throw std::runtime_error("Cannot connect to PipeWire; check the user audio session");
     static const pw_core_events core_events = [] {
         pw_core_events events{};
@@ -297,7 +297,7 @@ void Engine::init() {
     auto *properties = pw_properties_new(
         "factory.name", "support.null-audio-sink",
         PW_KEY_NODE_NAME, sink_name.c_str(),
-        PW_KEY_NODE_DESCRIPTION, "BT Audio Bridge",
+        PW_KEY_NODE_DESCRIPTION, "Bluetooth Audio Bridge",
         PW_KEY_MEDIA_CLASS, "Audio/Sink",
         PW_KEY_NODE_VIRTUAL, "true",
         "node.autoconnect", "false", "node.dont-fallback", "true",
@@ -310,12 +310,12 @@ void Engine::init() {
     sink->proxy = reinterpret_cast<pw_proxy *>(pw_core_create_object(core, "adapter", PW_TYPE_INTERFACE_Node,
         PW_VERSION_NODE, &properties->dict, 0));
     pw_properties_free(properties);
-    if (!sink->proxy) throw std::runtime_error("Cannot create the BT Audio Bridge virtual sink");
+    if (!sink->proxy) throw std::runtime_error("Cannot create the Bluetooth Audio Bridge virtual sink");
     pw_proxy_add_listener(sink->proxy, &sink->listener, &owned_events, sink.get());
     sink->listening = true;
 
     const auto filter_name = sink_name + ".mixer";
-    filter = pw_filter_new(core, "BT Audio Bridge mixer", pw_properties_new(
+    filter = pw_filter_new(core, "Bluetooth Audio Bridge mixer", pw_properties_new(
         PW_KEY_NODE_NAME, filter_name.c_str(), PW_KEY_MEDIA_CLASS, "Audio/Filter",
         PW_KEY_NODE_VIRTUAL, "true", "node.autoconnect", "false", "node.dont-fallback", "true",
         "node.dont-reconnect", "true", "node.passive", "true", nullptr));
@@ -680,8 +680,8 @@ void Engine::reconcile() {
     else if (multiple_phones) phone_error = "More than one iPhone source matches the configured address; refusing ambiguous routing";
     else if (phone) {
         copy_text(current.phone_stream_state, sizeof(current.phone_stream_state), pw_node_state_as_string(phone->node_state));
-        if (property(phone->props, "bt-audio-bridge.phone") != "true" || property(phone->props, "node.autoconnect") != "false")
-            phone_error = "The selected iPhone source needs the supplied WirePlumber input policy (bt-audio-bridge.phone=true and node.autoconnect=false)";
+        if (property(phone->props, "bluetooth-audio-bridge.phone") != "true" || property(phone->props, "node.autoconnect") != "false")
+            phone_error = "The selected iPhone source needs the supplied WirePlumber input policy (bluetooth-audio-bridge.phone=true and node.autoconnect=false)";
         else if (!a2dp(profile_for(*phone))) phone_error = "The selected iPhone source has no verified A2DP profile";
         else if (external_phone_route) phone_error = "The selected iPhone already has playback links outside the bridge; remove that automatic route to avoid duplicate or speaker playback";
         else if (phone_routes.size() != 2) phone_error = "Waiting for the selected iPhone stereo output ports";

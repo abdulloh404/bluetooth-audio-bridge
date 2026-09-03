@@ -1,8 +1,8 @@
 [package]
-name = "bt-audio-bridge-audio"
+name = "bluetooth-audio-bridge-audio"
 version = "0.1.0"
 edition = "2021"
-links = "bt_audio_bridge_audio"
+links = "bluetooth_audio_bridge_audio"
 build = "build.rs"
 
 [lib]

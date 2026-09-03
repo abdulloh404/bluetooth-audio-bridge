@@ -1,5 +1,5 @@
-#ifndef BT_AUDIO_BRIDGE_H
-#define BT_AUDIO_BRIDGE_H
+#ifndef BLUETOOTH_AUDIO_BRIDGE_H
+#define BLUETOOTH_AUDIO_BRIDGE_H
 
 #include <stddef.h>
 #include <stdint.h>

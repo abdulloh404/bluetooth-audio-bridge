@@ -1,4 +1,4 @@
-# BT Audio Bridge
+# Bluetooth Audio Bridge
 
 A Linux audio bridge that mixes iPhone media and desktop application audio into one selected pair of Bluetooth headphones. Rust controls configuration, BlueZ connections and commands; C++ connects and processes the PipeWire graph.
 
@@ -26,11 +26,11 @@ make install
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-The root `Makefile` delegates commands to `./scripts`. `make install` first runs the release build, then installs it; use `make build` to build only. The build produces `target/release/bt-audio-bridge` and `target/release/bt-audio-bridged`. Installation copies these binaries, the phone-policy helper, a draft configuration and an optional user service. Installation does not start or enable services. Existing application configuration is preserved.
+The root `Makefile` delegates commands to `./scripts`. `make install` first runs the release build, then installs it; use `make build` to build only. The build produces `target/release/bluetooth-audio-bridge` and `target/release/bluetooth-audio-bridged`. Installation copies these binaries, the phone-policy helper, a draft configuration and an optional user service. Installation does not start or enable services. Existing application configuration is preserved.
 
 You can use `sudo make install` and the other Make targets from your desktop account. The scripts return to the invoking user, restore the user session paths, and find Cargo in that user's Cargo directory. `sudo ./scripts/build.sh`, `sudo ./scripts/install.sh` and `sudo ./scripts/uninstall.sh` also support this behavior. Installation remains under your home directory. For custom Cargo/Rustup or XDG locations, use plain `make` or preserve those environment variables through `sudo`.
 
-Make controls use the installed programs in `~/.local/bin` directly. The PATH setting above allows the standalone `bt-audio-bridge` commands to work outside this directory. Run the standalone daemon and CLI as your desktop user. Run `bt-audio-bridge config init` if using the binaries directly without the installer.
+Make controls use the installed programs in `~/.local/bin` directly. The PATH setting above allows the standalone `bluetooth-audio-bridge` commands to work outside this directory. Run the standalone daemon and CLI as your desktop user. Run `bluetooth-audio-bridge config init` if using the binaries directly without the installer.
 
 ## Select devices and prepare the phone input
 
@@ -58,8 +58,8 @@ make phone-policy-install IPHONE=AA:BB:CC:DD:EE:FF
 
 The rule is scoped to the chosen phone, disables its automatic playback routing, and lowers its source priority. Its destination is printed by the helper:
 
-- WirePlumber 0.4: `$XDG_CONFIG_HOME/wireplumber/bluetooth.lua.d/90-bt-audio-bridge-phone.lua`.
-- WirePlumber 0.5: `$XDG_CONFIG_HOME/wireplumber/wireplumber.conf.d/90-bt-audio-bridge-phone.conf`.
+- WirePlumber 0.4: `$XDG_CONFIG_HOME/wireplumber/bluetooth.lua.d/90-bluetooth-audio-bridge-phone.lua`.
+- WirePlumber 0.5: `$XDG_CONFIG_HOME/wireplumber/wireplumber.conf.d/90-bluetooth-audio-bridge-phone.conf`.
 
 `XDG_CONFIG_HOME` defaults to `~/.config`. The helper preserves unrelated policy files and never restarts an audio service. Log out and back in to load the rule, then explicitly connect the iPhone through the desktop Bluetooth settings. A file on disk alone is insufficient: the daemon must also observe the matching safe phone input in the running PipeWire graph before it enables automatic phone reconnection. This observation is reset when the PipeWire connection is recreated.
 
@@ -73,11 +73,11 @@ Run the daemon in the foreground:
 make run
 ```
 
-Use another terminal for controls, and choose **BT Audio Bridge** as the output of the desktop applications you want to mix. You can select it as the system output yourself; the application does not set a default output or input.
+Use another terminal for controls, and choose **Bluetooth Audio Bridge** as the output of the desktop applications you want to mix. You can select it as the system output yourself; the application does not set a default output or input.
 
 ```sh
 make status
-bt-audio-bridge status --json
+bluetooth-audio-bridge status --json
 make volume CHANNEL=phone VALUE=0.4
 make volume CHANNEL=desktop VALUE=0.5
 make volume CHANNEL=master VALUE=0.8
@@ -95,14 +95,14 @@ To use the installed service instead of the foreground daemon, first end the for
 
 ```sh
 systemctl --user daemon-reload
-systemctl --user enable --now bt-audio-bridge.service
+systemctl --user enable --now bluetooth-audio-bridge.service
 ```
 
 Only one controller owns the configuration and graph at a time. The daemon handles Ctrl+C and termination by removing its own streams, links and virtual sink. It never stops the existing virtual microphone or other audio services.
 
 ## Configuration and behavior
 
-The default file is `$XDG_CONFIG_HOME/bt-audio-bridge/config.toml`. Both binaries accept `--config /absolute/path/config.toml`. Custom configuration files must be owned by the desktop user, have mode `0600`, and reside in a private application directory with mode `0700`. See [config/default.toml](config/default.toml) for all settings.
+The default file is `$XDG_CONFIG_HOME/bluetooth-audio-bridge/config.toml`. Both binaries accept `--config /absolute/path/config.toml`. Custom configuration files must be owned by the desktop user, have mode `0600`, and reside in a private application directory with mode `0700`. See [config/default.toml](config/default.toml) for all settings.
 
 | Setting or event | Behavior |
 | --- | --- |
@@ -124,7 +124,7 @@ If the system disables AAC or the needed A2DP roles, the status will require use
 If using the foreground daemon, end it yourself. If using the service:
 
 ```sh
-systemctl --user disable --now bt-audio-bridge.service
+systemctl --user disable --now bluetooth-audio-bridge.service
 ```
 
 Then run:
@@ -133,7 +133,7 @@ Then run:
 make uninstall
 ```
 
-The uninstaller refuses to continue while the daemon or service is active or the service is enabled. Close other bridge commands before running it. It removes the three installed programs, the user unit, both generated phone-rule variants, abandoned phone-policy temporary files, and the complete `bt-audio-bridge` directories under the user's XDG config, data, state, cache and runtime locations. This includes saved settings, temporary configuration files, the control socket and the lock. It also clears any failed state of this specific user unit and refreshes the user service manager. Cleanup errors are reported as failures instead of being silently ignored. Generated configuration and policy can also be removed when no managed binary installation remains.
+The uninstaller refuses to continue while the daemon or service is active or the service is enabled. Close other bridge commands before running it. It removes the three installed programs, the user unit, both generated phone-rule variants, abandoned phone-policy temporary files, and the complete `bluetooth-audio-bridge` directories under the user's XDG config, data, state, cache and runtime locations. This includes saved settings, temporary configuration files, the control socket and the lock. It also clears any failed state of this specific user unit and refreshes the user service manager. Cleanup errors are reported as failures instead of being silently ignored. Generated configuration and policy can also be removed when no managed binary installation remains.
 
 Only this application's installed files and application directories are removed. Ubuntu packages, Bluetooth pairings, shared audio configuration, the existing virtual microphone and the source/build directory are preserved. User-supplied configuration files outside these application directories are not installation artifacts and remain under the user's control. No default-device change is made by the bridge, so there is no saved system default for it to overwrite on removal. Log out and back in afterward to unload the removed phone policy from the running WirePlumber session; the uninstaller does not restart audio services.
 

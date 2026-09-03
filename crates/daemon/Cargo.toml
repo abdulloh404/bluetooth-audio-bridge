@@ -1,10 +1,10 @@
 [package]
-name = "bt-audio-bridge-daemon"
+name = "bluetooth-audio-bridge-daemon"
 version.workspace = true
 edition.workspace = true
 
 [[bin]]
-name = "bt-audio-bridged"
+name = "bluetooth-audio-bridged"
 path = "src/main.rs"
 
 [dependencies]
@@ -16,4 +16,4 @@ toml.workspace = true
 tokio.workspace = true
 zbus.workspace = true
 libc.workspace = true
-bt-audio-bridge-audio = { path = "../audio-ffi" }
+bluetooth-audio-bridge-audio = { path = "../audio-ffi" }

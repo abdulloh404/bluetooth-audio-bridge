@@ -105,15 +105,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b588b76d00fde79687d7646a9b5bdf3cc0f655e0bbd080335a95d7e96f3587da"
 
 [[package]]
-name = "bt-audio-bridge-audio"
+name = "bluetooth-audio-bridge-audio"
 version = "0.1.0"
 
 [[package]]
-name = "bt-audio-bridge-cli"
+name = "bluetooth-audio-bridge-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "bt-audio-bridge-daemon",
+ "bluetooth-audio-bridge-daemon",
  "clap",
  "serde_json",
  "tokio",
@@ -121,11 +121,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "bt-audio-bridge-daemon"
+name = "bluetooth-audio-bridge-daemon"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "bt-audio-bridge-audio",
+ "bluetooth-audio-bridge-audio",
  "clap",
  "libc",
  "serde",

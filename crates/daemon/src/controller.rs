@@ -2,7 +2,7 @@ use crate::bluetooth::{self, BluetoothStatus, MonitorConfig};
 use crate::config::{ensure_user, Config};
 use crate::ipc::{self, Command, Response};
 use anyhow::{Context, Result};
-use bt_audio_bridge_audio::{Engine, EngineConfig, Levels};
+use bluetooth_audio_bridge_audio::{Engine, EngineConfig, Levels};
 use serde::Serialize;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -23,8 +23,8 @@ struct AudioStatus {
     last_error: String,
 }
 
-impl From<bt_audio_bridge_audio::Status> for AudioStatus {
-    fn from(value: bt_audio_bridge_audio::Status) -> Self {
+impl From<bluetooth_audio_bridge_audio::Status> for AudioStatus {
+    fn from(value: bluetooth_audio_bridge_audio::Status) -> Self {
         Self {
             pipewire_connected: value.pipewire_connected,
             virtual_sink_ready: value.virtual_sink_ready,

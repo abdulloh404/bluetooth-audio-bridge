@@ -21,7 +21,7 @@ fn main() {
     run(&mut configure);
     run(Command::new("cmake").arg("--build").arg(&output));
     println!("cargo:rustc-link-search=native={}/lib", output.display());
-    println!("cargo:rustc-link-lib=static=bt_audio_bridge_audio");
+    println!("cargo:rustc-link-lib=static=bluetooth_audio_bridge_audio");
     let libraries = Command::new("pkg-config").args(["--libs", "libpipewire-0.3"])
         .output().expect("pkg-config is required for PipeWire");
     assert!(libraries.status.success(), "libpipewire-0.3 development files are required");

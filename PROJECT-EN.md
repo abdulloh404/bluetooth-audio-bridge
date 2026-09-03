@@ -1,10 +1,10 @@
-ได้ครับ นี่คือ Markdown ภาษาอังกฤษสำหรับใช้เป็น `PROJECT.md` โดยใช้ชื่อเสนอว่า `bt-audio-bridge` — ยังเป็นเอกสารออกแบบ ไม่ได้สร้างหรือแก้ไขโปรเจกต์ครับ
+ได้ครับ นี่คือ Markdown ภาษาอังกฤษสำหรับใช้เป็น `PROJECT.md` โดยใช้ชื่อเสนอว่า `bluetooth-audio-bridge` — ยังเป็นเอกสารออกแบบ ไม่ได้สร้างหรือแก้ไขโปรเจกต์ครับ
 
-# BT Audio Bridge
+# Bluetooth Audio Bridge
 
 ## 1. Project Overview
 
-BT Audio Bridge is a Linux application that combines audio from an iPhone and an Ubuntu computer, then sends the mixed audio to a single pair of Bluetooth headphones.
+Bluetooth Audio Bridge is a Linux application that combines audio from an iPhone and an Ubuntu computer, then sends the mixed audio to a single pair of Bluetooth headphones.
 
 The primary implementation languages are **Rust** and **C++**.
 
@@ -128,7 +128,7 @@ Implementation requirements:
 
 Create a virtual playback device named:
 
-**BT Audio Bridge**
+**Bluetooth Audio Bridge**
 
 The user can select it as the output for individual applications or explicitly choose it as the desktop default.
 
@@ -201,7 +201,7 @@ Simultaneous operation with the virtual microphone must be validated separately 
 ## 8. Proposed Repository Structure
 
 ```text
-bt-audio-bridge/
+bluetooth-audio-bridge/
 ├── Cargo.toml
 ├── crates/
 │   ├── daemon/
@@ -228,7 +228,7 @@ bt-audio-bridge/
 ├── config/
 │   └── default.toml
 ├── systemd/
-│   └── bt-audio-bridge.service
+│   └── bluetooth-audio-bridge.service
 ├── scripts/
 │   ├── build.sh
 │   ├── install.sh
@@ -249,7 +249,7 @@ iphone_address = "<paired iPhone address>"
 headphones_address = "<paired AirPods address>"
 
 [audio]
-virtual_sink_name = "bt-audio-bridge"
+virtual_sink_name = "bluetooth-audio-bridge"
 output_codec = "aac"
 allow_codec_fallback = false
 phone_gain = 0.5

@@ -1,8 +1,8 @@
-# BT Audio Bridge
+# Bluetooth Audio Bridge
 
 ## 1. ภาพรวมโปรเจกต์
 
-BT Audio Bridge เป็นแอปพลิเคชันบน Linux สำหรับรวมเสียงจาก iPhone และคอมพิวเตอร์ Ubuntu แล้วส่งเสียงที่รวมแล้วไปยังหูฟัง Bluetooth คู่เดียว
+Bluetooth Audio Bridge เป็นแอปพลิเคชันบน Linux สำหรับรวมเสียงจาก iPhone และคอมพิวเตอร์ Ubuntu แล้วส่งเสียงที่รวมแล้วไปยังหูฟัง Bluetooth คู่เดียว
 
 ใช้ **Rust** และ **C++** เป็นภาษาหลักในการพัฒนา
 
@@ -126,7 +126,7 @@ Rust ส่งคำสั่งควบคุม เช่น:
 
 สร้างอุปกรณ์เสียงออกเสมือนชื่อ:
 
-**BT Audio Bridge**
+**Bluetooth Audio Bridge**
 
 ผู้ใช้สามารถเลือกอุปกรณ์นี้เป็นเสียงออกของโปรแกรมบางตัว หรือเลือกให้เป็นอุปกรณ์เสียงออกหลักของคอมได้
 
@@ -202,7 +202,7 @@ Virtual microphone ของ AirPods ที่ใช้งานอยู่เ�
 ## 8. โครงสร้าง Repository ที่เสนอ
 
 ```text
-bt-audio-bridge/
+bluetooth-audio-bridge/
 ├── Cargo.toml
 ├── crates/
 │   ├── daemon/
@@ -229,7 +229,7 @@ bt-audio-bridge/
 ├── config/
 │   └── default.toml
 ├── systemd/
-│   └── bt-audio-bridge.service
+│   └── bluetooth-audio-bridge.service
 ├── scripts/
 │   ├── build.sh
 │   ├── install.sh
@@ -252,7 +252,7 @@ iphone_address = "<paired iPhone address>"
 headphones_address = "<paired AirPods address>"
 
 [audio]
-virtual_sink_name = "bt-audio-bridge"
+virtual_sink_name = "bluetooth-audio-bridge"
 output_codec = "aac"
 allow_codec_fallback = false
 phone_gain = 0.5
