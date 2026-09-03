@@ -7,10 +7,10 @@ This is the initial implementation. End-to-end audio, Bluetooth stability, AAC n
 ## Requirements
 
 - Linux with an active desktop user session and `XDG_RUNTIME_DIR`.
-- Rust 1.87 or newer, Cargo, a C++17 compiler, CMake and pkg-config.
+- Rust 1.87 or newer, Cargo, GNU Make, a C++17 compiler, CMake and pkg-config.
 - PipeWire 0.3.48 or newer with development headers and SPA development headers. Ubuntu package names: `build-essential`, `cmake`, `pkg-config`, `libpipewire-0.3-dev`, `libspa-0.2-dev`.
 - An existing PipeWire/WirePlumber/BlueZ audio setup, including the Bluetooth SPA plugin (`libspa-0.2-bluetooth` on Ubuntu). The phone-policy generator supports WirePlumber 0.4 and 0.5.
-- Python 3 for phone-policy generation and `flock` from util-linux for installation/removal.
+- Python 3 for phone-policy generation, `flock` from util-linux for installation/removal, and `runuser` from util-linux when using `sudo make`.
 - Both selected devices paired explicitly through the desktop Bluetooth settings. The iPhone must advertise A2DP Source and the headphones A2DP Sink.
 - AAC support in the installed Bluetooth audio stack and the selected headphones. Configuring AAC does not establish that it is available or in use.
 
@@ -21,23 +21,25 @@ The implementation targets the PipeWire 0.3.48 API. The development machine has 
 From this directory:
 
 ```sh
-./scripts/build.sh
-./scripts/install.sh
+make help
+make install
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-The build produces `target/release/bt-audio-bridge` and `target/release/bt-audio-bridged`. Installation copies these binaries, the phone-policy helper, a draft configuration and an optional user service. Installation does not start or enable services. Existing application configuration is preserved.
+The root `Makefile` delegates commands to `./scripts`. `make install` first runs the release build, then installs it; use `make build` to build only. The build produces `target/release/bt-audio-bridge` and `target/release/bt-audio-bridged`. Installation copies these binaries, the phone-policy helper, a draft configuration and an optional user service. Installation does not start or enable services. Existing application configuration is preserved.
 
-Use the desktop user account for the daemon, CLI and installer. Run `bt-audio-bridge config init` if using the binaries directly without the installer.
+You can use `sudo make install` and the other Make targets from your desktop account. The scripts return to the invoking user, restore the user session paths, and find Cargo in that user's Cargo directory. `sudo ./scripts/build.sh`, `sudo ./scripts/install.sh` and `sudo ./scripts/uninstall.sh` also support this behavior. Installation remains under your home directory. For custom Cargo/Rustup or XDG locations, use plain `make` or preserve those environment variables through `sudo`.
+
+Make controls use the installed programs in `~/.local/bin` directly. The PATH setting above allows the standalone `bt-audio-bridge` commands to work outside this directory. Run the standalone daemon and CLI as your desktop user. Run `bt-audio-bridge config init` if using the binaries directly without the installer.
 
 ## Select devices and prepare the phone input
 
 List devices already known to BlueZ, then replace the two example addresses with your paired devices:
 
 ```sh
-bt-audio-bridge devices
-bt-audio-bridge select --iphone AA:BB:CC:DD:EE:FF --headphones 11:22:33:44:55:66
-bt-audio-bridge config show
+make devices
+make select IPHONE=AA:BB:CC:DD:EE:FF HEADPHONES=11:22:33:44:55:66
+make config
 ```
 
 Device selection validates the pairing and the advertised A2DP role. The app never pairs or trusts another device automatically.
@@ -45,13 +47,13 @@ Device selection validates the pairing and the advertised A2DP role. The app nev
 WirePlumber normally treats incoming phone media as playback that can go to the default speakers. Prepare the selected phone as a private input before playing media. The helper detects the installed PipeWire and WirePlumber versions and the Bluetooth plugin's supported input property. Preview its rule:
 
 ```sh
-bt-audio-bridge-phone-policy AA:BB:CC:DD:EE:FF
+make phone-policy IPHONE=AA:BB:CC:DD:EE:FF
 ```
 
 After reviewing the output, this explicit command saves only that phone's rule:
 
 ```sh
-bt-audio-bridge-phone-policy AA:BB:CC:DD:EE:FF --install
+make phone-policy-install IPHONE=AA:BB:CC:DD:EE:FF
 ```
 
 The rule is scoped to the chosen phone, disables its automatic playback routing, and lowers its source priority. Its destination is printed by the helper:
@@ -68,21 +70,21 @@ On old PipeWire, the input property is `bluez5.a2dp-source-role`; newer versions
 Run the daemon in the foreground:
 
 ```sh
-bt-audio-bridged
+make run
 ```
 
 Use another terminal for controls, and choose **BT Audio Bridge** as the output of the desktop applications you want to mix. You can select it as the system output yourself; the application does not set a default output or input.
 
 ```sh
-bt-audio-bridge status
+make status
 bt-audio-bridge status --json
-bt-audio-bridge volume phone 0.4
-bt-audio-bridge volume desktop 0.5
-bt-audio-bridge volume master 0.8
-bt-audio-bridge mute phone on
-bt-audio-bridge mute phone off
-bt-audio-bridge disable
-bt-audio-bridge enable
+make volume CHANNEL=phone VALUE=0.4
+make volume CHANNEL=desktop VALUE=0.5
+make volume CHANNEL=master VALUE=0.8
+make mute CHANNEL=phone STATE=on
+make mute CHANNEL=phone STATE=off
+make disable
+make enable
 ```
 
 `volume` accepts finite linear values from `0.0` to `1.0`. `mute` accepts `phone`, `desktop` or `master` and `on` or `off`. Levels, mute states, enable state and device choices are saved atomically in the user's configuration. While the daemon runs, commands use its private local socket. Offline changes take effect at the next launch.
@@ -128,7 +130,7 @@ systemctl --user disable --now bt-audio-bridge.service
 Then run:
 
 ```sh
-./scripts/uninstall.sh
+make uninstall
 ```
 
 The uninstaller refuses to continue while the daemon or service is active or the service is enabled. Close other bridge commands before running it. It removes the three installed programs, the user unit, both generated phone-rule variants, abandoned phone-policy temporary files, and the complete `bt-audio-bridge` directories under the user's XDG config, data, state, cache and runtime locations. This includes saved settings, temporary configuration files, the control socket and the lock. It also clears any failed state of this specific user unit and refreshes the user service manager. Cleanup errors are reported as failures instead of being silently ignored. Generated configuration and policy can also be removed when no managed binary installation remains.

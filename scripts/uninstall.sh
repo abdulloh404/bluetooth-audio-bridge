@@ -4,8 +4,8 @@ umask 077
 
 app_uid=$(id -u)
 if [ "$app_uid" -eq 0 ]; then
-    printf '%s\n' 'Run this uninstaller as the desktop user, not root.' >&2
-    exit 1
+    project_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+    exec "$project_dir/scripts/make.sh" uninstall "$@"
 fi
 
 bin_dir="$HOME/.local/bin"

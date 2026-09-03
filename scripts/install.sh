@@ -2,13 +2,12 @@
 set -eu
 umask 077
 
+project_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 app_uid=$(id -u)
 if [ "$app_uid" -eq 0 ]; then
-    printf '%s\n' 'Run this installer as the desktop user, not root.' >&2
-    exit 1
+    exec "$project_dir/scripts/make.sh" install "$@"
 fi
 
-project_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 bin_dir="$HOME/.local/bin"
 config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/bt-audio-bridge"
 unit_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
@@ -17,7 +16,7 @@ runtime_dir="${XDG_RUNTIME_DIR:?Run this installer from your desktop user sessio
 
 for executable in bt-audio-bridge bt-audio-bridged; do
     if [ ! -x "$project_dir/target/release/$executable" ]; then
-        printf '%s\n' "Missing release binary: $executable. Run scripts/build.sh first." >&2
+        printf '%s\n' "Missing release binary: $executable. Run make build first." >&2
         exit 1
     fi
 done
