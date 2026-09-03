@@ -1,0 +1,15 @@
+# BT_AUDIO_BRIDGE_MANAGED_SERVICE=1
+[Unit]
+Description=BT Audio Bridge
+After=pipewire.service wireplumber.service
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/bt-audio-bridged
+Restart=on-failure
+RestartSec=3
+UMask=0077
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target
