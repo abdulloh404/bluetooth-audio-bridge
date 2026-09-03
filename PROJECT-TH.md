@@ -1,6 +1,6 @@
 # Bluetooth Audio Bridge
 
-> อัปเดตแนวทางตามคำขอผู้ใช้: รุ่นปัจจุบันใช้เส้นทางเสียงตรงของ PipeWire จาก iPhone ไปยังหูฟัง และควบคุมด้วย `systemctl --user start/stop bluetooth-audio-bridge.service` โดยเก็บคำสั่ง CLI เดิมทั้งหมด ใช้ codec ที่ระบบเจรจาอยู่และปรับระดับเสียงผ่าน software volume ของ stream เอกสารด้านล่างเป็นแบบออกแบบรุ่นก่อน ส่วนที่ระบุ virtual sink, custom PCM mixer และการบังคับ AAC ถูกแทนที่แล้ว ให้อ้างอิง [README.md](README.md) และ [config/default.toml](config/default.toml) สำหรับวิธีใช้และพฤติกรรมปัจจุบัน
+> แนวทางปัจจุบัน: service ตรวจพบเสียง Bluetooth A2DP ที่เข้ามาโดยอัตโนมัติและส่งผ่านลิงก์ตรงของ PipeWire ไปยัง output ที่เลือกใน Ubuntu ไม่ต้องกำหนด MAC หรือคู่ iPhone/หูฟัง คำสั่ง `select` เป็นเมนูเปิด/ปิดการส่งต่อเสียง และยังใช้ `systemctl --user start/stop bluetooth-audio-bridge.service` พร้อม CLI เดิมได้ ใช้ codec ที่ระบบเจรจาอยู่ เอกสารด้านล่างเป็นแบบออกแบบรุ่นก่อน ข้อกำหนดเรื่องคู่หูฟังคงที่, virtual sink, custom PCM mixer และการบังคับ AAC ถูกแทนที่แล้ว ให้อ้างอิง [README.md](README.md) และ [config/default.toml](config/default.toml) สำหรับการใช้งานปัจจุบัน
 
 ## 1. ภาพรวมโปรเจกต์
 

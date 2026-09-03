@@ -1,6 +1,6 @@
 # Bluetooth Audio Bridge
 
-> Updated user direction: the current version controls the native direct PipeWire route from the iPhone to selected headphones through `systemctl --user start/stop bluetooth-audio-bridge.service`, preserving every CLI command. It observes the existing negotiated codec and uses stream software volumes. The design below is the earlier reference; its virtual sink, custom PCM mixer and forced AAC requirements are superseded. See [README.md](README.md) and [config/default.toml](config/default.toml) for current behavior and usage.
+> Current direction: the service automatically detects incoming Bluetooth A2DP streams and forwards them through direct PipeWire links to the output selected in Ubuntu. No MAC addresses or fixed iPhone/headphone pair are required. The `select` command is an on/off forwarding menu; `systemctl --user start/stop bluetooth-audio-bridge.service` and all CLI command names remain available. Existing negotiated codecs are preserved. The design below is an earlier reference: fixed headphone selection, virtual sinks, custom PCM mixing and forced AAC are superseded. See [README.md](README.md) and [config/default.toml](config/default.toml) for current behavior and usage.
 
 ## 1. Project Overview
 
