@@ -94,13 +94,18 @@ impl ControllerLock {
     pub fn acquire() -> Result<Self> {
         let path = runtime_dir()?.join("controller.lock");
         let file = OpenOptions::new().read(true).write(true).create(true).truncate(false).mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW).open(path)?;
+            .custom_flags(libc::O_NOFOLLOW).open(&path)?;
         let meta = file.metadata()?;
         if !meta.is_file() || meta.uid() != ensure_user()? || meta.mode() & 0o077 != 0 {
             bail!("Controller lock must be a user-owned regular file with mode 0600");
         }
         if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
             bail!("Another controller is running or updating configuration; retry the command");
+        }
+        // uninstall อาจลบ lock ระหว่าง open กับ flock จึงต้องยืนยันว่า inode ยังตรงกับ path
+        let current = fs::symlink_metadata(&path).context("Controller lock was removed during cleanup; retry the command")?;
+        if !current.is_file() || current.dev() != meta.dev() || current.ino() != meta.ino() {
+            bail!("Controller lock changed during cleanup; retry the command");
         }
         Ok(Self { _file: file })
     }

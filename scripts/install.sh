@@ -1,7 +1,9 @@
 #!/bin/sh
 set -eu
+umask 077
 
-if [ "$(id -u)" -eq 0 ]; then
+app_uid=$(id -u)
+if [ "$app_uid" -eq 0 ]; then
     printf '%s\n' 'Run this installer as the desktop user, not root.' >&2
     exit 1
 fi
@@ -24,12 +26,25 @@ if [ -L "$runtime_dir" ] || [ -L "$runtime_dir/controller.lock" ]; then
     printf '%s\n' 'Refusing a symbolic link in the runtime lock path.' >&2
     exit 1
 fi
-if [ -f "$runtime_dir/controller.lock" ]; then
-    exec 9<"$runtime_dir/controller.lock"
-    if ! flock -n 9; then
-        printf '%s\n' 'BT Audio Bridge is running. Stop it yourself before installing.' >&2
-        exit 1
-    fi
+case "$runtime_dir" in
+    /*) ;;
+    *) printf '%s\n' 'XDG_RUNTIME_DIR must be absolute.' >&2; exit 1 ;;
+esac
+if [ ! -d "$runtime_dir" ]; then
+    mkdir -m 700 -- "$runtime_dir"
+fi
+if [ "$(stat -c '%u:%a' "$runtime_dir")" != "$app_uid:700" ] || { [ -e "$runtime_dir/controller.lock" ] && [ ! -f "$runtime_dir/controller.lock" ]; }; then
+    printf '%s\n' 'Expected a private user-owned runtime directory and a regular controller lock.' >&2
+    exit 1
+fi
+exec 9<>"$runtime_dir/controller.lock"
+if ! flock -n 9; then
+    printf '%s\n' 'BT Audio Bridge is running or another command is updating it. Close it yourself before installing.' >&2
+    exit 1
+fi
+if [ "$(stat -Lc '%d:%i' /proc/self/fd/9)" != "$(stat -c '%d:%i' "$runtime_dir/controller.lock")" ]; then
+    printf '%s\n' 'The runtime lock changed during cleanup. Retry installing.' >&2
+    exit 1
 fi
 
 for item in "$config_dir" "$data_dir" "$data_dir/install-marker" "$config_dir/config.toml" "$unit_dir/bt-audio-bridge.service" "$bin_dir/bt-audio-bridge" "$bin_dir/bt-audio-bridged" "$bin_dir/bt-audio-bridge-phone-policy"; do
@@ -52,6 +67,8 @@ fi
 
 mkdir -p "$bin_dir" "$unit_dir"
 install -d -m 700 "$config_dir" "$data_dir"
+# บันทึก ownership ก่อนคัดลอก เพื่อให้ uninstall จัดการ installation ที่ถูกขัดจังหวะได้
+printf '%s\n' 'BT_AUDIO_BRIDGE_INSTALL=1' > "$data_dir/install-marker"
 install -m 755 "$project_dir/target/release/bt-audio-bridge" "$bin_dir/bt-audio-bridge"
 install -m 755 "$project_dir/target/release/bt-audio-bridged" "$bin_dir/bt-audio-bridged"
 install -m 755 "$project_dir/scripts/phone-policy.sh" "$bin_dir/bt-audio-bridge-phone-policy"
@@ -59,9 +76,6 @@ install -m 644 "$project_dir/systemd/bt-audio-bridge.service" "$unit_dir/bt-audi
 if [ ! -e "$config_dir/config.toml" ]; then
     install -m 600 "$project_dir/config/default.toml" "$config_dir/config.toml"
 fi
-umask 077
-printf '%s\n' 'BT_AUDIO_BRIDGE_INSTALL=1' > "$data_dir/install-marker"
-
 printf '%s\n' "Installed in $bin_dir" "Configuration: $config_dir/config.toml"
 printf '%s\n' 'No service was enabled or started. Follow README.md to select devices and prepare the phone input.'
 printf '%s\n' 'After configuration, optional service commands:' '  systemctl --user daemon-reload' '  systemctl --user enable --now bt-audio-bridge.service'

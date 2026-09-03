@@ -129,10 +129,11 @@ Then run:
 
 ```sh
 ./scripts/uninstall.sh
-systemctl --user daemon-reload
 ```
 
-The uninstaller refuses to continue while the daemon or service is active or the service is enabled. It removes the managed binaries, unit, configuration and generated phone rule. Bluetooth pairings, other applications' audio configuration and the existing virtual microphone are preserved. No default-device change is made by the bridge, so there is no saved system default for it to overwrite on removal. The runtime lock file can remain until logout to preserve single-owner locking. A removed WirePlumber rule remains loaded until the next desktop session.
+The uninstaller refuses to continue while the daemon or service is active or the service is enabled. Close other bridge commands before running it. It removes the three installed programs, the user unit, both generated phone-rule variants, abandoned phone-policy temporary files, and the complete `bt-audio-bridge` directories under the user's XDG config, data, state, cache and runtime locations. This includes saved settings, temporary configuration files, the control socket and the lock. It also clears any failed state of this specific user unit and refreshes the user service manager. Cleanup errors are reported as failures instead of being silently ignored. Generated configuration and policy can also be removed when no managed binary installation remains.
+
+Only this application's installed files and application directories are removed. Ubuntu packages, Bluetooth pairings, shared audio configuration, the existing virtual microphone and the source/build directory are preserved. User-supplied configuration files outside these application directories are not installation artifacts and remain under the user's control. No default-device change is made by the bridge, so there is no saved system default for it to overwrite on removal. Log out and back in afterward to unload the removed phone policy from the running WirePlumber session; the uninstaller does not restart audio services.
 
 ## Hardware acceptance
 
