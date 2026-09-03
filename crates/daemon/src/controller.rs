@@ -131,7 +131,7 @@ pub async fn run(path: PathBuf) -> Result<()> {
                             "bluetooth": bluetooth_rx.borrow().clone(),
                             "audio": audio,
                             "policy_file_present": bluetooth::phone_policy_file_present(),
-                            "policy_message": if audio.policy_ready { "Bluetooth input policy is active; output follows Ubuntu" } else if bluetooth::phone_policy_file_present() { "Input policy is installed; waiting to observe it on incoming Bluetooth audio. Log out and back in after updating the policy" } else { "Install the input policy with make install or make phone-policy-install, then log out and back in" },
+                            "policy_message": if audio.policy_ready { "Bluetooth input policy is active; output follows Ubuntu" } else if bluetooth::phone_policy_file_present() { "Input policy is installed; waiting to observe it on incoming Bluetooth audio. Log out and back in after updating the policy" } else { "Ubuntu/WirePlumber manages Bluetooth playback; bridge forwarding controls require the optional input policy" },
                             "last_error": controller_error,
                         }))),
                         Command::ConfigShow => match serde_json::to_value(&config) {

@@ -1,8 +1,8 @@
 # Bluetooth Audio Bridge
 
-A user service that enables or pauses incoming Bluetooth audio in PipeWire. It discovers connected A2DP playback streams automatically and forwards them to the output selected in Ubuntu. You can change outputs in Ubuntu's sound settings while the controller is running.
+A CLI and optional user controller for Bluetooth audio in PipeWire. Standard installation preserves Ubuntu/WirePlumber's automatic Bluetooth playback. With the optional input policy, the controller enables or pauses incoming A2DP streams and forwards them to the output selected in Ubuntu.
 
-BlueZ/PipeWire receive the Bluetooth audio. The controller owns direct forwarding links and reads Ubuntu's default output and explicit per-stream output choices. Audio keeps its existing negotiated codecs and native PipeWire processing; there is no custom PCM mixer or fixed headphone destination.
+BlueZ/PipeWire receive the Bluetooth audio. When the input policy is enabled, the controller owns direct forwarding links and reads Ubuntu's default output and explicit per-stream output choices. Audio keeps its existing negotiated codecs and native PipeWire processing; there is no custom PCM mixer or fixed headphone destination.
 
 ## Programs
 
@@ -12,7 +12,7 @@ Keep both binaries installed:
 |---|---|
 | `bluetooth-audio-bridge` | Your CLI: `status`, `select`, `volume` and the other commands below. |
 | `bluetooth-audio-bridged` | Background controller launched by the user service. |
-| `bluetooth-audio-bridge-phone-policy` | Input-rule helper, also invoked by the installer. |
+| `bluetooth-audio-bridge-phone-policy` | Optional input-rule helper, invoked explicitly. |
 
 `bluetooth-audio-bridged` accepts `--config`, help and version options. Run `bluetooth-audio-bridge status` to query the controller.
 
@@ -40,9 +40,9 @@ make install
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-The root Makefile delegates to `./scripts`. Installation includes a release build, both binaries, the input-rule helper, the user service and the WirePlumber input rule. Existing audio settings are preserved. `sudo make install` also works from your desktop account; the scripts return to that account and use its Cargo and session paths.
+The root Makefile delegates to `./scripts`. Installation includes a release build, both binaries, the input-rule helper and the user service. It does not install or overwrite WirePlumber rules. Existing audio settings are preserved. `sudo make install` also works from your desktop account; the scripts return to that account and use its Cargo and session paths.
 
-**After first installation or a rule update, log out and back in to load the input rule.** Connect your Bluetooth source using Ubuntu's normal Bluetooth controls and choose an output in Ubuntu sound settings. No MAC addresses or iPhone/headphone selection are required. Installation does not start, enable or restart services.
+Connect your Bluetooth source using Ubuntu's normal Bluetooth controls and choose an output in Ubuntu sound settings. No MAC addresses or iPhone/headphone selection are required. Installation does not start, enable or restart services. If an earlier installation left a project input rule, follow the removal steps below and log out and back in before reinstalling to restore Ubuntu's automatic routing.
 
 Then start the controller and inspect its status:
 
@@ -54,13 +54,13 @@ bluetooth-audio-bridge status
 
 The controller stays available while waiting for Bluetooth audio, an output or the input rule. Empty legacy device fields do not prevent startup.
 
-Stop forwarding Bluetooth audio:
+Stop the controller:
 
 ```sh
 systemctl --user stop bluetooth-audio-bridge.service
 ```
 
-Stopping removes the controller's links and releases its software-volume adjustments. Desktop applications keep their existing routes. The input rule keeps automatic Bluetooth playback links from reappearing while the controller is stopped. Other audio and Bluetooth services continue running.
+Stopping removes the controller's links and releases its software-volume adjustments. Desktop applications keep their existing routes. With the optional input rule loaded, stopping also stops Bluetooth forwarding. Without that rule, Ubuntu manages Bluetooth playback independently of this service.
 
 To start at future logins, use `systemctl --user enable bluetooth-audio-bridge.service`. Read logs with `journalctl --user -u bluetooth-audio-bridge.service -n 50 --no-pager`. For foreground use, stop the user service yourself first, then run `make run`; only one controller can own the route and configuration.
 
@@ -85,7 +85,7 @@ For a script or a direct choice:
 bluetooth-audio-bridge select on
 ```
 
-Use `bluetooth-audio-bridge select off` to pause forwarding. `enable` and `disable` control the same setting. They keep the controller running and do not change systemd autostart. Offline changes are saved for the next controller start. New configurations default to forwarding on.
+Use `bluetooth-audio-bridge select off` to pause controller-owned forwarding when the optional input rule is loaded. `enable` and `disable` control the same setting. They keep the controller running and do not change systemd autostart. Offline changes are saved for the next controller start. New configurations default to forwarding on. Ubuntu's automatic Bluetooth routing remains independent when the optional rule is absent.
 
 The old `select --iphone ... --headphones ...` syntax is replaced by this menu. Choose the audio destination in Ubuntu.
 
@@ -115,7 +115,7 @@ bluetooth-audio-bridge mute phone off
 
 Volume values are relative software gains from `0.0` to `1.0`. New configurations use `1.0` for every channel, preserving the original stream level. `phone` applies to incoming Bluetooth A2DP streams; `desktop` applies to existing non-Bluetooth playback streams linked to audio outputs; `master` multiplies both groups. Capture, microphone and monitor streams are excluded. The controller preserves hardware-volume settings and respects external stream-volume edits when releasing control. Missing streams or unsupported software controls are reported through status.
 
-Status reports controller availability, the default Ubuntu output, detected/routed input counts and each input's actual target, readiness and observed output codec/format. Multiple inputs can follow different explicit output choices. Output codecs can differ from incoming Bluetooth codecs. `offline` means the controller is unavailable; automatic system audio may still play if the new input rule has not been loaded.
+Status reports controller availability, the default Ubuntu output, detected/controller-routed input counts and each input's target, readiness and observed output codec/format. Multiple inputs can follow different explicit output choices. Output codecs can differ from incoming Bluetooth codecs. With standard installation, Ubuntu owns Bluetooth playback and the controller's routed count may remain zero while audio plays. `offline` means the controller is unavailable.
 
 Make equivalents include `make select`, `make select STATE=on`, `make status`, `make devices`, `make volume CHANNEL=phone VALUE=0.4` and `make mute CHANNEL=phone STATE=on`. See `make help`.
 
@@ -123,7 +123,7 @@ Make equivalents include `make select`, `make select STATE=on`, `make status`, `
 
 The generated rule covers incoming BlueZ A2DP playback nodes, leaving headset-call capture and ordinary microphones alone. It disables automatic linking only for these Bluetooth inputs so the controller can own their lifetime. It preserves Bluetooth roles, codecs, rates and channel properties. The controller never changes Ubuntu's default output or application routes.
 
-The rule is installed automatically by `make install`. To preview or reinstall it separately:
+The rule is opt-in. It disables Ubuntu's automatic Bluetooth playback and makes forwarding depend on the running controller. Standard `make install` leaves it alone. To explicitly choose controller-owned forwarding, preview and install it separately, then log out and back in:
 
 ```sh
 make phone-policy
@@ -135,7 +135,7 @@ Rule locations (`XDG_CONFIG_HOME` defaults to `~/.config`):
 - WirePlumber 0.4: `$XDG_CONFIG_HOME/wireplumber/bluetooth.lua.d/90-bluetooth-audio-bridge-phone.lua`.
 - WirePlumber 0.5: `$XDG_CONFIG_HOME/wireplumber/wireplumber.conf.d/90-bluetooth-audio-bridge-phone.conf`.
 
-A rule from the older fixed-device or virtual-mixer versions must be updated and loaded. Existing foreign Bluetooth links are reported instead of being removed or duplicated.
+When opting in, update and load any rule from older fixed-device or virtual-mixer versions. Existing foreign Bluetooth links are reported instead of being removed or duplicated.
 
 Output selection follows PipeWire's current `default.audio.sink` and explicit per-stream `target.object`/`target.node` choices. If an explicitly selected output disappears, forwarding waits for a valid selection. Suitable stereo FL/FR ports are required; unsupported layouts are reported rather than changed. The controller follows these output choices without implementing additional WirePlumber role/filter routing rules.
 
@@ -147,15 +147,15 @@ Configuration lives in `$XDG_CONFIG_HOME/bluetooth-audio-bridge/config.toml` wit
 
 Legacy device addresses, reconnect settings and mixer-only fields remain readable but are ignored and omitted when settings are saved. Existing gain, mute and forwarding choices are preserved, including gains saved as `0.5` by older versions. Set a gain to `1.0` to use that stream's original level.
 
-Before removing the installation, end any foreground controller yourself and disable the user service:
+Before removing the installation, end any foreground controller yourself and stop the user service:
 
 ```sh
-systemctl --user disable --now bluetooth-audio-bridge.service
+systemctl --user stop bluetooth-audio-bridge.service
 ```
 
-Then run `make uninstall` from the project directory. The uninstaller requires the controller to be stopped and the unit disabled. It removes the installed programs, user unit, generated rules and project-owned XDG config/data/state/cache/runtime files. It clears this unit's failed state and refreshes the user service manager.
+Then run `make uninstall` from the project directory. The uninstaller requires both current and legacy controllers to be stopped; if `bt-audio-bridge.service` is still running, it reports the exact stop command. It disables the inactive project units and removes the installed programs, user units and overrides, autostart links, generated WirePlumber rules and temporary files, and project XDG config/data/state/cache/runtime directories, including sockets and locks. Cleanup covers both `bluetooth-audio-bridge` and the former `bt-audio-bridge` names, with ownership checks before deletion. It clears the project units' failed state and refreshes the user service manager.
 
-Ubuntu packages, Bluetooth pairings, shared audio configuration, other projects and source/build files remain in place. Log out and back in after removal to unload the rule and let Ubuntu's automatic Bluetooth playback routing resume.
+Ubuntu packages, Bluetooth pairings, shared audio state and logs, other projects and source/build files remain in place. For a clean reinstall, log out and back in after removal to unload the old rule from WirePlumber, then run `make install`. Standard installation preserves Ubuntu's automatic Bluetooth playback and creates fresh default project settings after an uninstall. Controller-based forwarding remains an explicit opt-in through the input policy.
 
 ## Validation scope
 

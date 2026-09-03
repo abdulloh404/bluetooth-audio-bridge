@@ -75,9 +75,12 @@ install -m 644 "$project_dir/systemd/bluetooth-audio-bridge.service" "$unit_dir/
 if [ ! -e "$config_dir/config.toml" ]; then
     install -m 600 "$project_dir/config/default.toml" "$config_dir/config.toml"
 fi
-"$project_dir/scripts/phone-policy.sh" --install
 printf '%s\n' "Installed in $bin_dir" "Configuration: $config_dir/config.toml"
-printf '%s\n' 'Log out and back in to load the Bluetooth input rule. Choose the output in Ubuntu; no device selection is required.'
-printf '%s\n' 'Use bluetooth-audio-bridge select to choose whether to forward Bluetooth audio.'
+printf '%s\n' 'Choose the Bluetooth audio output in Ubuntu. Installation leaves WirePlumber routing unchanged.'
+printf '%s\n' 'The optional input policy is installed only by make phone-policy-install; it makes Bluetooth forwarding depend on the controller.'
+if [ -e "${XDG_CONFIG_HOME:-$HOME/.config}/wireplumber/bluetooth.lua.d/90-bluetooth-audio-bridge-phone.lua" ] || \
+    [ -e "${XDG_CONFIG_HOME:-$HOME/.config}/wireplumber/wireplumber.conf.d/90-bluetooth-audio-bridge-phone.conf" ]; then
+    printf '%s\n' 'An existing Bluetooth Audio Bridge input rule is still present. For a clean reset to Ubuntu routing, uninstall, log out and back in, then install again.'
+fi
 printf '%s\n' 'Service commands after setup:' '  systemctl --user daemon-reload' '  systemctl --user start bluetooth-audio-bridge.service' '  systemctl --user stop bluetooth-audio-bridge.service' '  systemctl --user enable --now bluetooth-audio-bridge.service'
 printf '%s\n' 'Use bluetooth-audio-bridge status for route readiness. No service was enabled or started.'

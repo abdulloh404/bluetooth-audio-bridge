@@ -814,7 +814,7 @@ void Engine::reconcile() {
             property(input.props, "node.dont-fallback") == "true" && property(input.props, "node.dont-reconnect") == "true";
         current.policy_ready = current.policy_ready && policy;
         std::string error;
-        if (!policy) error = "Load the system-output Bluetooth policy and reconnect this device; its existing playback is left untouched";
+        if (!policy) error = "Ubuntu/WirePlumber manages this Bluetooth stream; bridge forwarding controls require the optional input policy";
         else if (input.node_state == PW_NODE_STATE_ERROR) error = "The incoming Bluetooth audio node is in an error state";
         else if (find_port(id, "out", "FL") == invalid_id || find_port(id, "out", "FR") == invalid_id)
             error = "Incoming Bluetooth audio requires usable stereo FL/FR output ports";
