@@ -139,7 +139,7 @@ When opting in, update and load any rule from older fixed-device or virtual-mixe
 
 Output selection follows PipeWire's current `default.audio.sink` and explicit per-stream `target.object`/`target.node` choices. If an explicitly selected output disappears, forwarding waits for a valid selection. Suitable stereo FL/FR ports are required; unsupported layouts are reported rather than changed. The controller follows these output choices without implementing additional WirePlumber role/filter routing rules.
 
-Bluetooth pairing, connections and reconnections remain under Ubuntu's control. PipeWire reconnection is retried by the controller without restarting any audio service.
+Pair and connect Bluetooth devices through Ubuntu. While forwarding is enabled and PipeWire is connected, the controller also opens the A2DP Source profile on already-connected, paired source devices that have no incoming A2DP transport. This handles phones that Ubuntu connects over Bluetooth LE without opening the Bluetooth Classic audio connection. It waits briefly for phone-initiated connections and leaves existing A2DP transports alone, including idle transports when playback is paused. Failed requests are retried after 30 seconds and reported through status and the service journal. Device paths are discovered from BlueZ; no fixed phone address is required. The controller does not pair devices, connect disconnected devices, or change headphone profiles. PipeWire reconnection is retried without restarting any audio service.
 
 ## Configuration and removal
 

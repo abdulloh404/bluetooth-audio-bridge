@@ -101,7 +101,8 @@ pub async fn run(path: PathBuf) -> Result<()> {
     let (request_tx, mut requests) = mpsc::channel(16);
     let server = tokio::spawn(ipc::serve(listener, request_tx));
     let (bluetooth_tx, bluetooth_rx) = watch::channel(BluetoothStatus::default());
-    let monitor = tokio::spawn(bluetooth::monitor(bluetooth_tx));
+    let (a2dp_tx, a2dp_rx) = watch::channel(false);
+    let monitor = tokio::spawn(bluetooth::monitor(bluetooth_tx, a2dp_rx));
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).context("Cannot install termination handler")?;
     let interrupt = tokio::signal::ctrl_c();
     tokio::pin!(interrupt);
@@ -199,7 +200,14 @@ pub async fn run(path: PathBuf) -> Result<()> {
                 }
             }
         }
+        a2dp_tx.send_if_modified(|enabled| {
+            let next = config.audio.routing_enabled && audio.pipewire_connected;
+            if *enabled == next { return false; }
+            *enabled = next;
+            true
+        });
     };
+    a2dp_tx.send_replace(false);
     monitor.abort();
     server.abort();
     if let Some(engine) = engine_instance.as_mut() {
