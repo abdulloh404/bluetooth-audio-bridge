@@ -5,6 +5,7 @@ use std::io::{Read, Write};
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -12,6 +13,7 @@ pub struct Config {
     #[serde(skip_serializing)]
     pub devices: Devices,
     pub audio: Audio,
+    pub bluetooth: Bluetooth,
     #[serde(skip_serializing)]
     pub connection: Connection,
 }
@@ -57,6 +59,30 @@ impl Default for Audio {
             master_mute: false,
             routing_enabled: true,
             headphone_disconnect_action: "silence".into(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Bluetooth {
+    pub dbus_timeout_seconds: u64,
+    pub a2dp_connect_delay_seconds: u64,
+    pub a2dp_retry_delay_seconds: u64,
+}
+
+impl Default for Bluetooth {
+    fn default() -> Self {
+        // ใช้ไฟล์เดียวกับ installer เป็นค่าเริ่มต้น เพื่อไม่กำหนดเวลาไว้ซ้ำในโค้ด
+        let defaults: toml::Table = toml::from_str(include_str!("../../../config/default.toml"))
+            .expect("Bundled default configuration must be valid TOML");
+        let seconds = |key: &str| defaults.get("bluetooth").and_then(|table| table.get(key))
+            .and_then(toml::Value::as_integer).and_then(|value| u64::try_from(value).ok())
+            .expect("Bundled Bluetooth timing defaults must be nonnegative integers");
+        Self {
+            dbus_timeout_seconds: seconds("dbus_timeout_seconds"),
+            a2dp_connect_delay_seconds: seconds("a2dp_connect_delay_seconds"),
+            a2dp_retry_delay_seconds: seconds("a2dp_retry_delay_seconds"),
         }
     }
 }
@@ -145,6 +171,18 @@ impl Config {
     pub fn validate(&self) -> Result<()> {
         for gain in [self.audio.phone_gain, self.audio.desktop_gain, self.audio.master_gain] {
             validate_gain(gain)?;
+        }
+        if self.bluetooth.dbus_timeout_seconds == 0 || self.bluetooth.a2dp_retry_delay_seconds == 0 {
+            bail!("bluetooth.dbus_timeout_seconds and bluetooth.a2dp_retry_delay_seconds must be greater than zero");
+        }
+        for (name, seconds) in [
+            ("dbus_timeout_seconds", self.bluetooth.dbus_timeout_seconds),
+            ("a2dp_connect_delay_seconds", self.bluetooth.a2dp_connect_delay_seconds),
+            ("a2dp_retry_delay_seconds", self.bluetooth.a2dp_retry_delay_seconds),
+        ] {
+            if Instant::now().checked_add(Duration::from_secs(seconds)).is_none() {
+                bail!("bluetooth.{name} exceeds the supported timer duration");
+            }
         }
         Ok(())
     }

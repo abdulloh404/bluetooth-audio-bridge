@@ -120,6 +120,7 @@ fn print_status(data: &serde_json::Value) {
 async fn main() -> Result<()> {
     let arguments = Arguments::parse();
     config::ensure_user()?;
+    let custom_config = arguments.config.is_some();
     let path = config::config_path(arguments.config)?;
     match arguments.command {
         CliCommand::Config { command: ConfigCommand::Init } => {
@@ -136,7 +137,13 @@ async fn main() -> Result<()> {
             print!("{}", toml::to_string_pretty(&config)?);
         }
         CliCommand::Devices => {
-            let devices = bluetooth::list_devices().await?;
+            let settings = match std::fs::symlink_metadata(&path) {
+                Ok(_) => Config::load(&path)?,
+                Err(error) if error.kind() == io::ErrorKind::NotFound && !custom_config => Config::default(),
+                Err(error) => return Err(error).with_context(|| format!("Cannot read {}", path.display())),
+            };
+            settings.validate()?;
+            let devices = bluetooth::list_devices(&settings.bluetooth).await?;
             println!("ADDRESS            PAIRED  CONNECTED  NAME");
             for device in devices {
                 println!("{}  {:<6}  {:<9}  {}", device.address, device.paired, device.connected, device.name);

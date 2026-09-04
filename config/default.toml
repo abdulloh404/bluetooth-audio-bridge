@@ -6,3 +6,8 @@ phone_mute = false
 desktop_mute = false
 master_mute = false
 routing_enabled = true
+
+[bluetooth]
+dbus_timeout_seconds = 5
+a2dp_connect_delay_seconds = 2
+a2dp_retry_delay_seconds = 30

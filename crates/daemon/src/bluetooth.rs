@@ -1,5 +1,5 @@
 //! อ่านสถานะ BlueZ และเปิด A2DP สำหรับแหล่งเสียงที่เชื่อมอยู่แล้วแต่ยังไม่มี transport
-use crate::config::{config_home, ensure_user};
+use crate::config::{config_home, ensure_user, Bluetooth};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -9,11 +9,8 @@ use std::time::{Duration, Instant};
 use tokio::sync::watch;
 use zbus::zvariant::{ObjectPath, OwnedValue};
 
-const DBUS_TIMEOUT: Duration = Duration::from_secs(5);
 const A2DP_SOURCE_UUID: &str = "0000110a-0000-1000-8000-00805f9b34fb";
 const A2DP_SINK_UUID: &str = "0000110b-0000-1000-8000-00805f9b34fb";
-const A2DP_CONNECT_DELAY: Duration = Duration::from_secs(2);
-const A2DP_RETRY_DELAY: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Device {
@@ -91,15 +88,15 @@ async fn snapshot(connection: &zbus::Connection) -> Result<Snapshot> {
     Ok(Snapshot { devices, missing_sources })
 }
 
-pub async fn list_devices() -> Result<Vec<Device>> {
+pub async fn list_devices(settings: &Bluetooth) -> Result<Vec<Device>> {
     ensure_user()?;
-    tokio::time::timeout(DBUS_TIMEOUT, async {
+    tokio::time::timeout(Duration::from_secs(settings.dbus_timeout_seconds), async {
         let connection = zbus::Connection::system().await.context("Cannot connect to the system D-Bus")?;
         snapshot(&connection).await.map(|snapshot| snapshot.devices).context("Cannot list BlueZ devices")
     }).await.context("BlueZ device query timed out")?
 }
 
-async fn connect_missing_sources(connection: &zbus::Connection, sources: &[(String, String)], enabled: &watch::Receiver<bool>, retries: &mut HashMap<String, A2dpRetry>) -> String {
+async fn connect_missing_sources(connection: &zbus::Connection, sources: &[(String, String)], enabled: &watch::Receiver<bool>, settings: &Bluetooth, retries: &mut HashMap<String, A2dpRetry>) -> String {
     if !*enabled.borrow() {
         retries.clear();
         return String::new();
@@ -109,11 +106,11 @@ async fn connect_missing_sources(connection: &zbus::Connection, sources: &[(Stri
         if !*enabled.borrow() { break; }
         // รอให้การเชื่อมจากโทรศัพท์เสร็จก่อน และเว้นช่วงเพื่อไม่รบกวน BlueZ เมื่อเชื่อมไม่สำเร็จ
         let retry = retries.entry(path.clone()).or_insert_with(|| A2dpRetry {
-            next_attempt: Instant::now() + A2DP_CONNECT_DELAY,
+            next_attempt: Instant::now() + Duration::from_secs(settings.a2dp_connect_delay_seconds),
             last_error: String::new(),
         });
         if Instant::now() < retry.next_attempt { continue; }
-        let result = tokio::time::timeout(DBUS_TIMEOUT, async {
+        let result = tokio::time::timeout(Duration::from_secs(settings.dbus_timeout_seconds), async {
             let proxy = zbus::Proxy::new(connection, "org.bluez", path.as_str(), "org.bluez.Device1").await?;
             if !proxy.get_property::<bool>("Paired").await? || !proxy.get_property::<bool>("Connected").await? || !*enabled.borrow() {
                 return Ok::<(), zbus::Error>(());
@@ -121,7 +118,7 @@ async fn connect_missing_sources(connection: &zbus::Connection, sources: &[(Stri
             // ConnectProfile ระบุ BR/EDR โดยตรง จึงเปิด A2DP ได้แม้ Connect ปกติเลือก LE
             proxy.call::<_, _, ()>("ConnectProfile", &(A2DP_SOURCE_UUID,)).await
         }).await;
-        retry.next_attempt = Instant::now() + A2DP_RETRY_DELAY;
+        retry.next_attempt = Instant::now() + Duration::from_secs(settings.a2dp_retry_delay_seconds);
         let error = match result {
             Ok(Ok(())) => String::new(),
             Ok(Err(error)) => format!("Cannot connect incoming A2DP for {address}: {error}"),
@@ -136,7 +133,7 @@ async fn connect_missing_sources(connection: &zbus::Connection, sources: &[(Stri
         .filter(|error| !error.is_empty()).collect::<Vec<_>>().join("; ")
 }
 
-pub async fn monitor(status: watch::Sender<BluetoothStatus>, enabled: watch::Receiver<bool>) {
+pub async fn monitor(status: watch::Sender<BluetoothStatus>, enabled: watch::Receiver<bool>, settings: Bluetooth) {
     let mut connection: Option<zbus::Connection> = None;
     let mut retries = HashMap::new();
     let mut interval = tokio::time::interval(Duration::from_secs(2));
@@ -144,7 +141,7 @@ pub async fn monitor(status: watch::Sender<BluetoothStatus>, enabled: watch::Rec
     loop {
         interval.tick().await;
         if status.is_closed() { return; }
-        let result = tokio::time::timeout(DBUS_TIMEOUT, async {
+        let result = tokio::time::timeout(Duration::from_secs(settings.dbus_timeout_seconds), async {
             if connection.is_none() { connection = Some(zbus::Connection::system().await?); }
             snapshot(connection.as_ref().context("D-Bus connection unavailable")?).await
         }).await;
@@ -158,7 +155,7 @@ pub async fn monitor(status: watch::Sender<BluetoothStatus>, enabled: watch::Rec
             }
         };
         let last_error = if let Some(connection) = connection.as_ref() {
-            connect_missing_sources(connection, &snapshot.missing_sources, &enabled, &mut retries).await
+            connect_missing_sources(connection, &snapshot.missing_sources, &enabled, &settings, &mut retries).await
         } else { String::new() };
         status.send_replace(BluetoothStatus { available: true, devices: snapshot.devices, last_error });
     }

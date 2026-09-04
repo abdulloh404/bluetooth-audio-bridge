@@ -102,7 +102,7 @@ pub async fn run(path: PathBuf) -> Result<()> {
     let server = tokio::spawn(ipc::serve(listener, request_tx));
     let (bluetooth_tx, bluetooth_rx) = watch::channel(BluetoothStatus::default());
     let (a2dp_tx, a2dp_rx) = watch::channel(false);
-    let monitor = tokio::spawn(bluetooth::monitor(bluetooth_tx, a2dp_rx));
+    let monitor = tokio::spawn(bluetooth::monitor(bluetooth_tx, a2dp_rx, config.bluetooth.clone()));
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).context("Cannot install termination handler")?;
     let interrupt = tokio::signal::ctrl_c();
     tokio::pin!(interrupt);
